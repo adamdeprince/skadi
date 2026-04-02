@@ -968,6 +968,9 @@ static struct headerentry he_template[]={
   {"",            "X-SMTP-Server", NO_HELP,             10, 0, NULL,
    NULL,          NULL, NULL, NULL,                 NULL, NULL, NULL,
    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, KS_NONE},
+  {"",            "X-SEND-Server", NO_HELP,             10, 0, NULL,
+   NULL,          NULL, NULL, NULL,                 NULL, NULL, NULL,
+   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, KS_NONE},
   {"",            "X-Cursor-Pos", NO_HELP,              10, 0, NULL,
    NULL,          NULL, NULL, NULL,                 NULL, NULL, NULL,
    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, KS_NONE},
@@ -1833,7 +1836,7 @@ pine_send(ENVELOPE *outgoing, struct mail_bodystruct **body,
     struct headerentry *he, *headents, *he_to = NULL, *he_fcc = NULL, *he_news = NULL, *he_lcc = NULL,
 		       *he_from = NULL;
     PINEFIELD          *pfields, *pf, *pf_nobody = NULL, *pf_to = NULL,
-                       *pf_smtp_server = NULL, *pf_nntp_server = NULL,
+                       *pf_smtp_server = NULL, *pf_send_server= NULL, *pf_nntp_server = NULL,
 		       *pf_fcc = NULL, *pf_err = NULL, *pf_uid = NULL, *pf_mbox = NULL, *pf_curpos = NULL,
 		       *pf_ourrep = NULL, *pf_ourhdrs = NULL, **sending_order;
     METAENV             header;
@@ -2165,7 +2168,7 @@ pine_send(ENVELOPE *outgoing, struct mail_bodystruct **body,
 	    N_AUTHRCVD,N_FROM, N_REPLYTO, N_NEWS, N_TO, N_CC, N_BCC,
 	    N_FCC, N_LCC, N_ATTCH, N_SUBJ, N_REF, N_DATE, N_INREPLY,
 	    N_MSGID, N_PRIORITY, N_USERAGENT, N_NOBODY, N_POSTERR, N_RPLUID, N_RPLMBOX,
-	    N_SMTP, N_NNTP, N_CURPOS, N_OURREPLYTO, N_OURHDRS
+	    N_SMTP, N_SEND, N_NNTP, N_CURPOS, N_OURREPLYTO, N_OURHDRS
 #if	!(defined(DOS) || defined(OS2)) || defined(NOAUTH)
 	    , N_SENDER
 #endif
@@ -2322,26 +2325,32 @@ pine_send(ENVELOPE *outgoing, struct mail_bodystruct **body,
 		pf->text		= &pf->textbuf;
 		pf->extdata			= NULL;
 	    }
-	    else if(index == N_NNTP){
+	    else if(index == N_SEND){
 		sending_order[NN+18]	= pf;
+		pf_send_server		= pf;
+		pf->text		= &pf->textbuf;
+		pf->extdata			= NULL;
+	    }
+	    else if(index == N_NNTP){
+		sending_order[NN+19]	= pf;
 		pf_nntp_server		= pf;
 		pf->text		= &pf->textbuf;
 		pf->extdata			= NULL;
 	    }
 	    else if(index == N_CURPOS){
-		sending_order[NN+19]	= pf;
+		sending_order[NN+20]	= pf;
 		pf_curpos		= pf;
 		pf->text		= &pf->textbuf;
 		pf->extdata			= NULL;
 	    }
 	    else if(index == N_OURREPLYTO){
-		sending_order[NN+20]	= pf;
+		sending_order[NN+21]	= pf;
 		pf_ourrep		= pf;
 		pf->text		= &pf->textbuf;
 		pf->extdata			= NULL;
 	    }
 	    else if(index == N_OURHDRS){
-		sending_order[NN+21]	= pf;
+		sending_order[NN+22]	= pf;
 		pf_ourhdrs		= pf;
 		pf->text		= &pf->textbuf;
 		pf->extdata			= NULL;
@@ -3473,6 +3482,17 @@ pine_send(ENVELOPE *outgoing, struct mail_bodystruct **body,
 		      pf_smtp_server->textbuf = smtp;
 		    else
 		      pf_smtp_server->textbuf = cpystr("");
+		}
+
+		/* Save the role-specific send server */
+		if(role && role->send_server && *role->send_server){
+		    char  *q, *smtp = NULL;
+		    char **lp;
+		    size_t len = 0;
+
+		    pf_send_server->writehdr = 1;
+		    pf_send_server->localcopy = 1;
+		    pf_send_server->textbuf = cpystr(role->send_server);
 		}
 
 		/* Save the role-specific nntp server */

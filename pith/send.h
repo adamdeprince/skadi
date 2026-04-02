@@ -192,6 +192,7 @@ typedef enum {	  N_AUTHRCVD = 0
 		, N_RPLUID
 		, N_RPLMBOX
 		, N_SMTP
+		, N_SEND
 		, N_NNTP
 		, N_CURPOS
 		, N_OURREPLYTO

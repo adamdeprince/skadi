@@ -71,6 +71,7 @@ PINEFIELD pf_template[] = {
   {"X-Reply-UID", FreeText,	0, 0, 0, 0},	/* N_RPLUID */
   {"X-Reply-Mbox",FreeText,	0, 0, 0, 0},	/* N_RPLMBOX */
   {"X-SMTP-Server",FreeText,	0, 0, 0, 0},	/* N_SMTP */
+  {"X-SEND-Server",FreeText,	0, 0, 0, 0},	/* N_SEND */
   {"X-NNTP-Server",FreeText,	0, 0, 0, 0},	/* N_NNTP */
   {"X-Cursor-Pos",FreeText,	0, 0, 0, 0},	/* N_CURPOS */
   {"X-Our-ReplyTo",FreeText,	0, 0, 0, 0},	/* N_OURREPLYTO */
@@ -323,7 +324,7 @@ redraft_work(MAILSTREAM **streamp, long int cont_msg, ENVELOPE **outgoing,
     gf_o_t	 pc;
     char	*extras, **fields, **values, *p;
     char        *hdrs[2], *h, *charset;
-    char       **smtp_servers = NULL, **nntp_servers = NULL;
+    char       **smtp_servers = NULL, *send_server = NULL, **nntp_servers = NULL;
     int		 i, pine_generated = 0, our_replyto = 0;
     int          added_to_role = 0;
     unsigned	 gbpt_flags = GBPT_NONE;
@@ -388,11 +389,12 @@ redraft_work(MAILSTREAM **streamp, long int cont_msg, ENVELOPE **outgoing,
 #define INDEX_REPLYUID    2
 #define INDEX_REPLYMBOX   3
 #define INDEX_SMTP        4
-#define INDEX_NNTP        5
-#define INDEX_CURSORPOS   6
-#define INDEX_OUR_REPLYTO 7
-#define INDEX_LCC         8	/* MUST REMAIN LAST FIELD DECLARED */
-#define FIELD_COUNT       9
+#define INDEX_SEND        5
+#define INDEX_NNTP        6
+#define INDEX_CURSORPOS   7
+#define INDEX_OUR_REPLYTO 8
+#define INDEX_LCC         9	/* MUST REMAIN LAST FIELD DECLARED */
+#define FIELD_COUNT      10
 
 	i = count_custom_hdrs_pf(*custom,1) + FIELD_COUNT + 1;
 
@@ -414,6 +416,7 @@ redraft_work(MAILSTREAM **streamp, long int cont_msg, ENVELOPE **outgoing,
 	fields[++i]   = "X-Reply-UID";	/* Reply'd to msg's UID */
 	fields[++i]   = "X-Reply-Mbox";	/* Reply'd to msg's Mailbox */
 	fields[++i]   = "X-SMTP-Server";/* SMTP server to use */
+	fields[++i]   = "X-SEND-Server";/* SEND server (other than SMTP) to use */
 	fields[++i]   = "X-NNTP-Server";/* NNTP server to use */
 	fields[++i]   = "X-Cursor-Pos";	/* Cursor position */
 	fields[++i]   = "X-Our-ReplyTo";	/* ReplyTo is real */
@@ -563,6 +566,11 @@ redraft_work(MAILSTREAM **streamp, long int cont_msg, ENVELOPE **outgoing,
 		} while(*p++);
 
 		fs_give((void **) &values[INDEX_SMTP]);
+	    }
+
+	    if(values[INDEX_SEND]){
+	      send_server = cpystr(values[INDEX_SEND]);
+	      fs_give((void **) &values[INDEX_REPLYMBOX]);
 	    }
 
 	    if(values[INDEX_NNTP]){
@@ -772,7 +780,7 @@ redraft_work(MAILSTREAM **streamp, long int cont_msg, ENVELOPE **outgoing,
 	      mail_free_address(&(*outgoing)->reply_to);
 	}
 
-	if((smtp_servers || nntp_servers)
+	if((smtp_servers || send_server || nntp_servers)
 	   && role && (*role == NULL || added_to_role)){
 	    if(*role == NULL){
 		*role = (ACTION_S *)fs_get(sizeof(**role));
@@ -781,6 +789,8 @@ redraft_work(MAILSTREAM **streamp, long int cont_msg, ENVELOPE **outgoing,
 
 	    if(smtp_servers)
 	      (*role)->smtp = smtp_servers;
+	    if(send_server)
+	      (*role)->send_server = send_server;
 	    if(nntp_servers)
 	      (*role)->nntp = nntp_servers;
 	}
@@ -1288,20 +1298,24 @@ pine_new_env(ENVELOPE *outgoing, char **fccp, char ***tobufpp, PINEFIELD *custom
 		sending_order[NN+17]	= pf;
                 break;
 
-              case N_NNTP:			/* won't be used here */
+              case N_SEND:			/* won't be used here */
 		sending_order[NN+18]	= pf;
                 break;
 
-              case N_CURPOS:			/* won't be used here */
+              case N_NNTP:			/* won't be used here */
 		sending_order[NN+19]	= pf;
                 break;
 
-              case N_OURREPLYTO:		/* won't be used here */
+              case N_CURPOS:			/* won't be used here */
 		sending_order[NN+20]	= pf;
                 break;
 
-              case N_OURHDRS:			/* won't be used here */
+              case N_OURREPLYTO:		/* won't be used here */
 		sending_order[NN+21]	= pf;
+                break;
+
+              case N_OURHDRS:			/* won't be used here */
+		sending_order[NN+22]	= pf;
                 break;
 
               default:
