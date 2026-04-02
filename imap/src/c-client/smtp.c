@@ -503,11 +503,13 @@ long smtp_mail (SENDSTREAM *stream,char *type,ENVELOPE *env,BODY *body)
     }
 				/* send "MAIL FROM" command */
     switch (i = smtp_send (stream,type,tmp)) {
-    case SMTPUNAVAIL:		/* mailbox unavailable? */
     case SMTPWANTAUTH:		/* wants authentication? */
     case SMTPWANTAUTH2:
       if (ESMTP.auth) retry = T;/* yes, retry with authentication */
     case SMTPOK:		/* looks good */
+      break;
+    case SMTPUNAVAIL:
+	smtp_seterror(stream, i, "mailbox unavailable");
       break;
     default:			/* other failure */
       error_string = stream && stream->reply ? cpystr(stream->reply) : NIL;
@@ -627,7 +629,6 @@ long smtp_rcpt (SENDSTREAM *stream,ADDRESS *adr,long *error)
 	switch (smtp_send (stream,"RCPT",tmp)) {
 	case SMTPOK:		/* looks good */
 	  break;
-	case SMTPUNAVAIL:	/* mailbox unavailable? */
 	case SMTPWANTAUTH:	/* wants authentication? */
 	case SMTPWANTAUTH2:
 	  if (ESMTP.auth) return T;
