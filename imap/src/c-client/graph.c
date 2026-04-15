@@ -4571,6 +4571,8 @@ long graph_text (MAILSTREAM *stream, unsigned long msgno, STRING *bs, long flags
   MESSAGECACHE *elt;
   char *s;
   GRAPH_MESSAGE *msg;
+
+  INIT (bs, mail_string, "", 0);
                                 /* UID call "impossible" */
   if (flags & FT_UID || !LOCAL) return NIL;
   elt = mail_elt (stream, msgno);
