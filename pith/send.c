@@ -1770,7 +1770,10 @@ call_mailer(METAENV *header, struct mail_bodystruct *body,
 		strncpy(error_buf, _("Error posting to graph stream."), sizeof(error_buf)-1);
 		error_buf[sizeof(error_buf)-1] = '\0';
 	    }
-	    graph_send_mail(stream);
+	    if(!graph_send_mail(stream)){
+		strncpy(error_buf, _("Error sendind mail (graph)"), sizeof(error_buf)-1);
+		error_buf[sizeof(error_buf)-1] = '\0';
+	    }
 	    mail_close(stream);
 	}
 	else {
@@ -1778,8 +1781,10 @@ call_mailer(METAENV *header, struct mail_bodystruct *body,
 	  error_buf[sizeof(error_buf)-1] = '\0';
 	}
 
-	if(*error_buf)
+	if(*error_buf){
+	   error_mess = error_buf;
 	   dprint((1, "%s", error_buf));
+	}
 	goto done;
     }
 
