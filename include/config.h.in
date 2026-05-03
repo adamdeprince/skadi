@@ -171,7 +171,7 @@
 /* Default configuration value */
 #undef FORWARDED_FLAG
 
-/* Define to 1 if 'TIOCGWINSZ' requires <sys/ioctl.h>. */
+/* Define to 1 if `TIOCGWINSZ' requires <sys/ioctl.h>. */
 #undef GWINSZ_IN_SYS_IOCTL
 
 /* Define if systems uses old BSD-style terminal control */
@@ -200,7 +200,7 @@
    the CoreFoundation framework. */
 #undef HAVE_CFPREFERENCESCOPYAPPVALUE
 
-/* Define to 1 if you have the 'chown' function. */
+/* Define to 1 if you have the `chown' function. */
 #undef HAVE_CHOWN
 
 /* Define to 1 if you have the <ctype.h> header file. */
@@ -210,7 +210,7 @@
    */
 #undef HAVE_DCGETTEXT
 
-/* Define to 1 if you have the <dirent.h> header file, and it defines 'DIR'.
+/* Define to 1 if you have the <dirent.h> header file, and it defines `DIR'.
    */
 #undef HAVE_DIRENT_H
 
@@ -223,25 +223,25 @@
 /* Define to 1 if you have the <fcntl.h> header file. */
 #undef HAVE_FCNTL_H
 
-/* Define to 1 if you have the 'fork' function. */
+/* Define to 1 if you have the `fork' function. */
 #undef HAVE_FORK
 
-/* Define to 1 if you have the 'fsync' function. */
+/* Define to 1 if you have the `fsync' function. */
 #undef HAVE_FSYNC
 
-/* Define to 1 if you have the 'getpwnam' function. */
+/* Define to 1 if you have the `getpwnam' function. */
 #undef HAVE_GETPWNAM
 
-/* Define to 1 if you have the 'getpwuid' function. */
+/* Define to 1 if you have the `getpwuid' function. */
 #undef HAVE_GETPWUID
 
 /* Define if the GNU gettext() function is already present or preinstalled. */
 #undef HAVE_GETTEXT
 
-/* Define to 1 if you have the 'gettimeofday' function. */
+/* Define to 1 if you have the `gettimeofday' function. */
 #undef HAVE_GETTIMEOFDAY
 
-/* Define to 1 if you have the 'getuid' function. */
+/* Define to 1 if you have the `getuid' function. */
 #undef HAVE_GETUID
 
 /* Define if you have the iconv() function. */
@@ -256,16 +256,16 @@
 /* Define to 1 if you have the <limits.h> header file. */
 #undef HAVE_LIMITS_H
 
-/* Define to 1 if you have the 'listen' function. */
+/* Define to 1 if you have the `listen' function. */
 #undef HAVE_LISTEN
 
 /* Define to 1 if you have the <locale.h> header file. */
 #undef HAVE_LOCALE_H
 
-/* Define to 1 if you have the 'mbstowcs' function. */
+/* Define to 1 if you have the `mbstowcs' function. */
 #undef HAVE_MBSTOWCS
 
-/* Define to 1 if you have the 'memcpy' function. */
+/* Define to 1 if you have the `memcpy' function. */
 #undef HAVE_MEMCPY
 
 /* Define to 1 if you have the <memory.h> header file. */
@@ -274,19 +274,19 @@
 /* Define if system supports subsecond, non-alarm sleep */
 #undef HAVE_NANOSLEEP
 
-/* Define to 1 if you have the <ndir.h> header file, and it defines 'DIR'. */
+/* Define to 1 if you have the <ndir.h> header file, and it defines `DIR'. */
 #undef HAVE_NDIR_H
 
 /* Define to 1 if you have the <netdb.h> header file. */
 #undef HAVE_NETDB_H
 
-/* Define to 1 if you have the 'pclose' function. */
+/* Define to 1 if you have the `pclose' function. */
 #undef HAVE_PCLOSE
 
-/* Define to 1 if you have the 'poll' function. */
+/* Define to 1 if you have the `poll' function. */
 #undef HAVE_POLL
 
-/* Define to 1 if you have the 'popen' function. */
+/* Define to 1 if you have the `popen' function. */
 #undef HAVE_POPEN
 
 /* System has pthread support */
@@ -295,76 +295,73 @@
 /* Define to 1 if you have the <pthread.h> header file. */
 #undef HAVE_PTHREAD_H
 
-/* Define to 1 if you have the 'putenv' function. */
+/* Define to 1 if you have the `putenv' function. */
 #undef HAVE_PUTENV
 
 /* Define to 1 if you have the <pwd.h> header file. */
 #undef HAVE_PWD_H
 
-/* Define to 1 if you have the 'qsort' function. */
+/* Define to 1 if you have the `qsort' function. */
 #undef HAVE_QSORT
 
-/* Define to 1 if you have the 'read' function. */
+/* Define to 1 if you have the `read' function. */
 #undef HAVE_READ
 
 /* Regular expression header file exists */
 #undef HAVE_REGEX_H
 
-/* Define to 1 if you have the 'rename' function. */
+/* Define to 1 if you have the `rename' function. */
 #undef HAVE_RENAME
 
-/* Define to 1 if you have the 'select' function. */
+/* Define to 1 if you have the `select' function. */
 #undef HAVE_SELECT
 
-/* Define to 1 if you have the 'setenv' function. */
+/* Define to 1 if you have the `setenv' function. */
 #undef HAVE_SETENV
 
-/* Define to 1 if you have the 'setjmp' function. */
+/* Define to 1 if you have the `setjmp' function. */
 #undef HAVE_SETJMP
 
 /* Define to 1 if you have the <setjmp.h> header file. */
 #undef HAVE_SETJMP_H
 
-/* Define to 1 if you have the 'sigaction' function. */
+/* Define to 1 if you have the `sigaction' function. */
 #undef HAVE_SIGACTION
 
-/* Define to 1 if you have the 'sigaddset' function. */
+/* Define to 1 if you have the `sigaddset' function. */
 #undef HAVE_SIGADDSET
 
-/* Define to 1 if you have the 'sigemptyset' function. */
+/* Define to 1 if you have the `sigemptyset' function. */
 #undef HAVE_SIGEMPTYSET
 
-/* Define to 1 if you have the 'signal' function. */
+/* Define to 1 if you have the `signal' function. */
 #undef HAVE_SIGNAL
 
 /* Define to 1 if you have the <signal.h> header file. */
 #undef HAVE_SIGNAL_H
 
-/* Define to 1 if you have the 'sigprocmask' function. */
+/* Define to 1 if you have the `sigprocmask' function. */
 #undef HAVE_SIGPROCMASK
 
-/* Define to 1 if you have the 'sigrelse' function. */
+/* Define to 1 if you have the `sigrelse' function. */
 #undef HAVE_SIGRELSE
 
-/* Define to 1 if you have the 'sigset' function. */
+/* Define to 1 if you have the `sigset' function. */
 #undef HAVE_SIGSET
 
-/* Define to 1 if you have the 'srandom' function. */
+/* Define to 1 if you have the `srandom' function. */
 #undef HAVE_SRANDOM
 
 /* Define to 1 if you have the <stdint.h> header file. */
 #undef HAVE_STDINT_H
 
-/* Define to 1 if you have the <stdio.h> header file. */
-#undef HAVE_STDIO_H
-
 /* Define to 1 if you have the <stdlib.h> header file. */
 #undef HAVE_STDLIB_H
 
-/* Define to 1 if you have the 'strchr' function. */
+/* Define to 1 if you have the `strchr' function. */
 #undef HAVE_STRCHR
 
-/* Define to 1 if you have the 'strcoll' function and it is properly defined.
+/* Define to 1 if you have the `strcoll' function and it is properly defined.
    */
 #undef HAVE_STRCOLL
 
@@ -377,10 +374,10 @@
 /* Define to 1 if you have the <stropts.h> header file. */
 #undef HAVE_STROPTS_H
 
-/* Define to 1 if you have the 'strtol' function. */
+/* Define to 1 if you have the `strtol' function. */
 #undef HAVE_STRTOL
 
-/* Define to 1 if you have the 'strtoul' function. */
+/* Define to 1 if you have the `strtoul' function. */
 #undef HAVE_STRTOUL
 
 /* Define if system supplies syslog() logging */
@@ -389,14 +386,14 @@
 /* Define to 1 if you have the <syslog.h> header file. */
 #undef HAVE_SYSLOG_H
 
-/* Define to 1 if you have the <sys/dir.h> header file, and it defines 'DIR'.
+/* Define to 1 if you have the <sys/dir.h> header file, and it defines `DIR'.
    */
 #undef HAVE_SYS_DIR_H
 
 /* Define to 1 if you have the <sys/ioctl.h> header file. */
 #undef HAVE_SYS_IOCTL_H
 
-/* Define to 1 if you have the <sys/ndir.h> header file, and it defines 'DIR'.
+/* Define to 1 if you have the <sys/ndir.h> header file, and it defines `DIR'.
    */
 #undef HAVE_SYS_NDIR_H
 
@@ -418,9 +415,6 @@
 /* Define to 1 if you have the <sys/syslog.h> header file. */
 #undef HAVE_SYS_SYSLOG_H
 
-/* Define to 1 if you have the <sys/time.h> header file. */
-#undef HAVE_SYS_TIME_H
-
 /* Define to 1 if you have the <sys/types.h> header file. */
 #undef HAVE_SYS_TYPES_H
 
@@ -436,16 +430,16 @@
 /* Define to 1 if you have <sys/wait.h> that is POSIX.1 compatible. */
 #undef HAVE_SYS_WAIT_H
 
-/* Define to 1 if you have the 'tmpfile' function. */
+/* Define to 1 if you have the `tmpfile' function. */
 #undef HAVE_TMPFILE
 
-/* Define to 1 if you have the 'truncate' function. */
+/* Define to 1 if you have the `truncate' function. */
 #undef HAVE_TRUNCATE
 
-/* Define to 1 if you have the 'uname' function. */
+/* Define to 1 if you have the `uname' function. */
 #undef HAVE_UNAME
 
-/* Define to 1 if the system has the type 'union wait'. */
+/* Define to 1 if the system has the type `union wait'. */
 #undef HAVE_UNION_WAIT
 
 /* Define to 1 if you have the <unistd.h> header file. */
@@ -454,37 +448,37 @@
 /* Define to 1 if you have the <utime.h> header file. */
 #undef HAVE_UTIME_H
 
-/* Define to 1 if you have the 'vfork' function. */
+/* Define to 1 if you have the `vfork' function. */
 #undef HAVE_VFORK
 
 /* Define to 1 if you have the <vfork.h> header file. */
 #undef HAVE_VFORK_H
 
-/* Define to 1 if you have the 'wait' function. */
+/* Define to 1 if you have the `wait' function. */
 #undef HAVE_WAIT
 
-/* Define to 1 if you have the 'wait4' function. */
+/* Define to 1 if you have the `wait4' function. */
 #undef HAVE_WAIT4
 
-/* Define to 1 if you have the 'waitpid' function. */
+/* Define to 1 if you have the `waitpid' function. */
 #undef HAVE_WAITPID
 
 /* Define to 1 if you have the <wchar.h> header file. */
 #undef HAVE_WCHAR_H
 
-/* Define to 1 if you have the 'wcrtomb' function. */
+/* Define to 1 if you have the `wcrtomb' function. */
 #undef HAVE_WCRTOMB
 
-/* Define to 1 if you have the 'wctomb' function. */
+/* Define to 1 if you have the `wctomb' function. */
 #undef HAVE_WCTOMB
 
-/* Define to 1 if you have the 'wcwidth' function. */
+/* Define to 1 if you have the `wcwidth' function. */
 #undef HAVE_WCWIDTH
 
-/* Define to 1 if 'fork' works. */
+/* Define to 1 if `fork' works. */
 #undef HAVE_WORKING_FORK
 
-/* Define to 1 if 'vfork' works. */
+/* Define to 1 if `vfork' works. */
 #undef HAVE_WORKING_VFORK
 
 /* Default extension for html files */
@@ -575,13 +569,13 @@
 /* Define as the return type of signal handlers (`int' or `void'). */
 #undef RETSIGTYPE
 
-/* Define to the type of arg 1 for 'select'. */
+/* Define to the type of arg 1 for `select'. */
 #undef SELECT_TYPE_ARG1
 
-/* Define to the type of args 2, 3 and 4 for 'select'. */
+/* Define to the type of args 2, 3 and 4 for `select'. */
 #undef SELECT_TYPE_ARG234
 
-/* Define to the type of arg 5 for 'select'. */
+/* Define to the type of arg 5 for `select'. */
 #undef SELECT_TYPE_ARG5
 
 /* Local mail submission agent */
@@ -593,13 +587,13 @@
 /* Posting agent to use when no nntp-servers defined */
 #undef SENDNEWS
 
-/* The size of 'unsigned int', as computed by sizeof. */
+/* The size of `unsigned int', as computed by sizeof. */
 #undef SIZEOF_UNSIGNED_INT
 
-/* The size of 'unsigned long', as computed by sizeof. */
+/* The size of `unsigned long', as computed by sizeof. */
 #undef SIZEOF_UNSIGNED_LONG
 
-/* The size of 'unsigned short', as computed by sizeof. */
+/* The size of `unsigned short', as computed by sizeof. */
 #undef SIZEOF_UNSIGNED_SHORT
 
 /* Enable S/MIME code */
@@ -611,12 +605,10 @@
 /* Simple spell checker: reads stdin, emits misspellings on stdout */
 #undef SPELLER
 
-/* Define to 1 if the 'S_IS*' macros in <sys/stat.h> do not work properly. */
+/* Define to 1 if the `S_IS*' macros in <sys/stat.h> do not work properly. */
 #undef STAT_MACROS_BROKEN
 
-/* Define to 1 if all of the C89 standard headers exist (not just the ones
-   required in a freestanding environment). This macro is provided for
-   backward compatibility; new code need not use it. */
+/* Define to 1 if you have the ANSI C header files. */
 #undef STDC_HEADERS
 
 /* System defined for shorter than unsigned 32 bit integer */
@@ -640,11 +632,10 @@
 /* File name separator as string constant */
 #undef S_FILESEP
 
-/* Define to 1 if you can safely include both <sys/time.h> and <time.h>. This
-   macro is obsolete. */
+/* Define to 1 if you can safely include both <sys/time.h> and <time.h>. */
 #undef TIME_WITH_SYS_TIME
 
-/* Define to 1 if your <sys/time.h> declares 'struct tm'. */
+/* Define to 1 if your <sys/time.h> declares `struct tm'. */
 #undef TM_IN_SYS_TIME
 
 /* Default configuration value */
@@ -668,23 +659,23 @@
 /* Enable extended pthread features on Solaris */
 #undef __EXTENSIONS__
 
-/* Define as 'int' if <sys/types.h> doesn't define. */
+/* Define to `int' if <sys/types.h> doesn't define. */
 #undef gid_t
 
-/* Define to 'int' if <sys/types.h> does not define. */
+/* Define to `int' if <sys/types.h> does not define. */
 #undef mode_t
 
-/* Define as a signed integer type capable of holding a process identifier. */
+/* Define to `int' if <sys/types.h> does not define. */
 #undef pid_t
 
 /* qsort compare function argument type */
 #undef qsort_t
 
-/* Define as 'unsigned int' if <stddef.h> doesn't define. */
+/* Define to `unsigned int' if <sys/types.h> does not define. */
 #undef size_t
 
-/* Define as 'int' if <sys/types.h> doesn't define. */
+/* Define to `int' if <sys/types.h> doesn't define. */
 #undef uid_t
 
-/* Define as 'fork' if 'vfork' does not work. */
+/* Define as `fork' if `vfork' does not work. */
 #undef vfork
