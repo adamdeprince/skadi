@@ -4532,7 +4532,7 @@ graph_send_mail(MAILSTREAM *stream)
   graph_send_command(stream);		/* this uses LOCAL->private in graph_challenge_post */
   if(stream && LOCAL && LOCAL->private)
     fs_give((void **) &LOCAL->private);	/* we do not need the base64 text anymore */
-  return stream && LOCAL && (LOCAL->status == HTTP_OK) ? 1 : 0;
+  return stream && LOCAL && (LOCAL->status == HTTP_OK_ACCEPTED) ? 1 : 0;
 }
 
 /************** Loser Function Support ****************/
