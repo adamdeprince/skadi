@@ -3118,6 +3118,8 @@ feature_list(int index)
 	 F_GRAPH_PREFER_PLAIN_TEXT, h_config_graph_prefer_plain_text, PREF_VIEW, 0},
 	{"graph-downloads-envelope-only", NULL,
 	 F_GRAPH_DOWNLOAD_ENVELOPE_ONLY, h_config_graph_downloads_envelope_only, PREF_VIEW, 1},
+	{"graph-expunge-moves-to-trash", NULL,
+	 F_GRAPH_EXPUNGE_MOVES_TO_TRASH, h_config_graph_expunge_moves_to_trash, PREF_VIEW, 1},
 	{"quell-charset-warning", "Suppress Character Set Warning",
 	 F_QUELL_CHARSET_WARNING, h_config_quell_charset_warning, PREF_VIEW, 0},
 	{"quell-server-after-link-in-html", "Suppress Server After Link in HTML",

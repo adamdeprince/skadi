@@ -1,7 +1,7 @@
 /*
  * Copyright 2016-2026 Eduardo Chappa
  *
- * Last Edited: February 8, 2026 Eduardo Chappa <chappa@washington.edu>
+ * Last Edited: April 25, 2026 Eduardo Chappa
  *
  */
 /* ========================================================================
@@ -319,6 +319,8 @@
 #define SET_PREFERPLAINTEXT	(long) 475
 #define GET_GRAPHENVELOPEONLY	(long) 476
 #define SET_GRAPHENVELOPEONLY	(long) 477
+#define SET_GRAPHMOVEONEXPUNGE	(long) 478
+#define GET_GRAPHMOVEONEXPUNGE	(long) 479
 	/* 5xx: local file drivers */
 #define GET_MBXPROTECTION (long) 500
 #define SET_MBXPROTECTION (long) 501

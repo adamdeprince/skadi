@@ -147,7 +147,7 @@ with help text for the config screen and the composer that didn't have any
 reasonable place to be called from.
 Dummy change to get revision in pine.hlp
 ============= h_revision =================
-Alpine Commit 725 2026-05-02 18:48:13
+Alpine Commit 726 2026-05-05 12:23:35
 ============= h_news =================
 <HTML>
 <HEAD>
@@ -2361,6 +2361,13 @@ is an incoming folder, consider adding your folder to the list of
 as this will minimize the number of times that you will reload the
 information from the server since the folder will be kept open even
 when you go to another folder.
+
+<P>
+Another option that you should consider how to configure is how to handle
+expunging messages from a GRAPH folder. Should messages be permanently deleted
+or should they be moved to a Trash folder? This is controlled by the
+option
+<a href="h_config_graph_expunge_moves_to_trash"><!--#echo var="FEAT_graph-expunge-moves-to-trash"--></a>
 
 <P>
 &lt;End of help&gt;
@@ -5446,6 +5453,7 @@ There are also additional details on
 <li><a href="h_config_prefer_plain_text">FEATURE: <!--#echo var="FEAT_prefer-plain-text"--></a>
 <li><a href="h_config_graph_prefer_plain_text">FEATURE: <!--#echo var="FEAT_graph-prefer-plain-text"--></a>
 <li><a href="h_config_graph_downloads_envelope_only">FEATURE: <!--#echo var="FEAT_graph-download-envelope-only"--></a>
+<li><a href="h_config_graph_expunge_moves_to_trash">FEATURE: <!--#echo var="FEAT_graph-expunge-moves-to-trash"--></a>
 <li><a href="h_config_preopen_stayopens">FEATURE: <!--#echo var="FEAT_preopen-stayopen-folders"--></a>
 <li><a href="h_config_preserve_start_stop">FEATURE: <!--#echo var="FEAT_preserve-start-stop-characters"--></a>
 <li><a href="h_config_quell_folder_internal_msg">FEATURE: <!--#echo var="FEAT_quell-folder-internal-msg"--></a>
@@ -32449,6 +32457,40 @@ If you configured Alpine to use the /loser flag, this option will be ignored.
 
 
 
+
+<P>
+&lt;End of help on this topic&gt;
+</BODY>
+</HTML>
+====== h_config_graph_expunge_moves_to_trash =====
+<HTML>
+<HEAD>
+<TITLE>FEATURE: <!--#echo var="FEAT_graph-expunge-moves-to-trash"--></TITLE>
+</HEAD>
+<BODY>
+<H1>FEATURE: <!--#echo var="FEAT_graph-expunge-moves-to-trash"--></H1>
+
+This option controls what happens to a message when it is expunged from a
+folder in a GRAPH server. Alpine users expect that after removing a message
+this will never be accessible again. However, users who use Outlook&reg;
+in the web expect that deleted (and expunged) messages will be moved to
+a Trash folder, and the final expunging of a message is to remove it from
+the Trash folder.
+
+<P>
+Given that these two behaviors are incompatible with each other, and given
+that deleting permanently a message is irreversible, the default behavior
+for this feature is that deleted and expunged messages will be moved to your
+Trash folder. Disabling this feature will cause that deleted and expunged
+messages will be permanently deleted.
+
+<P>
+Having said all of the above, you should know that other policies may affect
+your ability to recover a message. In a GRAPH server an administrator may
+make a backup of your folder before you delete messages from it, and so
+they may be accessible even after deletion and expunging. To learn more about this
+<A HREF="https://learn.microsoft.com/en-us/exchange/policy-and-compliance/recoverable-items-folder/recoverable-items-folder#deleted-item-retention">read this acticle on Deleted item retention</A> published
+by Microsoft&reg;.
 
 <P>
 &lt;End of help on this topic&gt;

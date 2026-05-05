@@ -4629,6 +4629,17 @@ toggle_feature_bit(struct pine *ps, int index, struct variable *var, CONF_S *cl,
 	       "Download envelope only feature may have effect in your next Alpine session.");
 	  break;
 
+	case F_GRAPH_EXPUNGE_MOVES_TO_TRASH:
+	  mail_parameters(NIL, SET_GRAPHMOVEONEXPUNGE,
+	     (void *)(unsigned long) F_ON(F_GRAPH_EXPUNGE_MOVES_TO_TRASH, ps));
+	  if(F_ON(F_GRAPH_EXPUNGE_MOVES_TO_TRASH, ps))
+	     q_status_message(SM_ORDER | SM_DING, 3, 4,
+	       "Expunged messages will be moved to your Trash Folder.");
+	  else
+	     q_status_message(SM_ORDER | SM_DING, 3, 4,
+	       "Expunged messages will be permanently deleted.");
+	  break;
+
 #ifdef	_WINDOWS
 	case F_SHOW_CURSOR :
 	  mswin_showcaret(F_ON(f->id,ps));

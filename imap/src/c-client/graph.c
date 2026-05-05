@@ -2,11 +2,8 @@
  * Copyright 2021-2026 Eduardo Chappa
  *
  * Created: June 24, 2021.
- * Last Edited: March 25, 2026
- * Consider add: Prefer: IdType="ImmutableId" to every request.
- * Consider dealing with "@odata.type":"#microsoft.graph.eventMessageRequest",
- * "@odata.type":"#microsoft.graph.eventMessageResponse", "@odata.type":"#microsoft.graph.eventMessage",
- * @odata.type":"#microsoft.graph.message"
+ * Last Edited: April 26, 2026
+ *
  */
 
 #include <ctype.h>
@@ -66,6 +63,7 @@ static long envelopeonly = NIL;		/* sets if only the envelope is downloaded, or 
 static long preferplaintext = NIL;	/* use graph default setting */
 static GraphOperation GraphOp = GetFoldersList;	/* default operation on graph_open() */
 static long GraphCountMessages = (long) GRAPHCOUNTMESSAGES; /* number of messages to get at the time */
+static long GraphMoveOnExpunge = 0L;   /* sets default to not to move messages to Trash on expunge */
 
 /* not all odata fields apply to all objects, but we put them all together */
 typedef struct odata_s {
@@ -467,6 +465,11 @@ graph_parameters (long function, void *value)
 						? GRAPHMINCOUNTMSGS : GraphCountMessages)
 					: GRAPHMAXCOUNTMSGS);
 				  break;
+
+	case SET_GRAPHMOVEONEXPUNGE: GraphMoveOnExpunge = (long) value;
+	case GET_GRAPHMOVEONEXPUNGE: ret = (void *) (long) GraphMoveOnExpunge;
+				  break;
+
  	 default:
     		ret = NIL;		/* error case */
     		break;
@@ -1450,13 +1453,17 @@ graph_parse_body_text(MAILSTREAM *stream, JSON_S *json, unsigned long *msgnop)
 void
 graph_parse_expunge(MAILSTREAM *stream, JSON_S *json)
 {
-   unsigned long id, status;
+   unsigned long id, receivedstatus, expectedstatus;
    JSON_S *jw, *jx, *jy;
    unsigned char *idstring;
    MESSAGECACHE *elt;
+   unsigned long move;
 
 		/* note that JSON_S *jx is used in json_value_type */
    if(!json) return;
+
+   move = (unsigned long) mail_parameters(NIL, GET_GRAPHMOVEONEXPUNGE, NIL);
+   expectedstatus = move ? HTTP_OK_CREATED : HTTP_OK_NO_CONTENT;
 
    /* This is a two step process. The first part clears out the GRAPH_MESSAGE
     * structure from any message expunged. Since the responses from the server
@@ -1464,14 +1471,14 @@ graph_parse_expunge(MAILSTREAM *stream, JSON_S *json)
     * we can do it in order.
     */
    if(json->jtype == JArray && !compare_cstring(json->name, "responses")){
-	LOCAL->status = HTTP_OK_NO_CONTENT;
 	for(jw = (JSON_S *) json->value; jw; jw = jw->next){
 	    if(jw->jtype != JObject) continue;
 	    jy = (JSON_S *) jw->value;
 	    json_assign((void **) &idstring, jy, "id", JString);
 	    id = strtoul(idstring, NIL, 10);
-	    status = json_value_type(jy, "status", JLong);
-	    if(status == HTTP_OK_NO_CONTENT){
+	    receivedstatus = json_value_type(jy, "status", JLong);
+	    if(receivedstatus == expectedstatus){
+	       LOCAL->status = receivedstatus;
 	       elt = mail_elt(stream, id);
 	       graph_message_free((GRAPH_MESSAGE **) &elt->private.driverp);
 	    }
@@ -3342,9 +3349,14 @@ long graph_expunge (MAILSTREAM *stream,char *sequence,long options)
 {
   unsigned long i, total, totalex, counter;
   MESSAGECACHE *elt;
-  unsigned char *body = NIL;
+  unsigned char *body = NIL, *folderbody = NIL;
+  unsigned long move;
 
   if(!stream || !LOCAL) return NIL;
+
+  if(move = (unsigned long) mail_parameters(NIL, GET_GRAPHMOVEONEXPUNGE, NIL))
+     folderbody = cpystr("{\"destinationId\":\"deleteditems\"}");
+
   /*
    * Given that we expunge one message at the time, if we expunge number 1 first
    * then number 2 becomes number 1, which makes it not possible to expunge
@@ -3392,17 +3404,29 @@ long graph_expunge (MAILSTREAM *stream,char *sequence,long options)
 		buffer_add(&body, LOCAL->folder.id);
 		buffer_add(&body, "/messages/");
 		buffer_add(&body, GDPP(elt)->id);
-		buffer_add(&body, "/permanentDelete\"");
+		if(move)
+		   buffer_add(&body, "/move\"");
+		else
+		   buffer_add(&body, "/permanentDelete\"");
 		buffer_add(&body, ",");		/* separate with next element */
 
 		buffer_add(&body, "\"headers\":");/* this is a json object named "headers" */
 		buffer_add(&body, "{");		/* begin of headers */
+		if(move){
+		   buffer_add(&body, "\"Content-Type\":\"application/json\""); buffer_add(&body, ",");
+		   buffer_add(&body, "\"Content-Length\":");
+		   sprintf(LOCAL->tmp, "%lu", strlen(folderbody));
+		   buffer_add(&body, LOCAL->tmp);
+		}
+		else{
 		   buffer_add(&body, "\"Content-Type\":\"text/plain\""); buffer_add(&body, ",");
 		   buffer_add(&body, "\"Content-Length\":0");
+		}
 		buffer_add(&body, "}");		/* end of the headers object */
 		buffer_add(&body, ",");		/* separate with next element */
 
-		buffer_add(&body, "\"body\":\"\"");	/* empty body for each post request */
+		buffer_add(&body, "\"body\":");/* this is a json object named "body" */
+		buffer_add(&body, move ? folderbody : (unsigned char *) "\"\"");
 	    buffer_add(&body, "}");	/* end this request */
 	    counter++;			/* count it! */
 	}
@@ -3433,6 +3457,7 @@ long graph_expunge (MAILSTREAM *stream,char *sequence,long options)
        }
    }
 
+  if(folderbody) fs_give((void **) &folderbody);
   if(stream && LOCAL && LOCAL->private) LOCAL->private = NIL;
   return stream && LOCAL && LOCAL->status == HTTP_OK_NO_CONTENT ? LONGT : NIL;
 }
