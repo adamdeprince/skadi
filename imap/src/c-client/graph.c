@@ -2,7 +2,7 @@
  * Copyright 2021-2026 Eduardo Chappa
  *
  * Created: June 24, 2021.
- * Last Edited: April 26, 2026
+ * Last Edited: May 20, 2026
  *
  */
 
@@ -158,6 +158,7 @@ typedef struct graph_message_s {
 typedef struct graph_folder_s {
    unsigned char *id;
    unsigned char *displayName;
+   unsigned char *displayNameOrig;
    unsigned char *parentFolderId;
    unsigned long childFolderCount;
    unsigned long unreadItemCount;
@@ -287,7 +288,6 @@ char *graph_filter_string (char *, long *);
 GRAPH_MESSAGE *graph_fetch_msg (MAILSTREAM *, unsigned long);
 long graph_get_attachment_list (MAILSTREAM *, GRAPH_MESSAGE *);
 GRAPH_USER_FOLDERS *graph_get_folder_list (MAILSTREAM *, unsigned char *);
-GRAPH_USER_FOLDERS *graph_get_folder_info (MAILSTREAM *, unsigned char *);
 void graph_parse_body_structure (MAILSTREAM *,BODY *, GRAPH_MESSAGE *, char *);
 void graph_update_message (GRAPH_MESSAGE **, JSON_S *);
 void graph_free_address (GRAPH_ADDRESS_S **);
@@ -658,23 +658,6 @@ graph_get_folder_list(MAILSTREAM *stream, unsigned char *fldid)
   } while (stream && LOCAL && total < LOCAL->folderscount);
 
   return (stream && LOCAL && gfolder) ? gfolder : NIL;
-}
-
-GRAPH_USER_FOLDERS *
-graph_get_folder_info(MAILSTREAM *stream, unsigned char *fname)
-{
-  GRAPH_USER_FOLDERS *gfolder;
-
-  if(LOCAL->folders) graph_free_folders(&LOCAL->folders);
-  LOCAL->folders = graph_get_folder_list(stream, fname);
-
-  if(stream && LOCAL && LOCAL->folders){
-     for(gfolder = LOCAL->folders; gfolder; gfolder = gfolder->next)
-         if((stream->inbox && !compare_cstring(fname, gfolder->displayName))
-	     || !strcmp(fname, gfolder->displayName))
-	   break;
-  }
-  return gfolder;
 }
 
 void graph_scan (MAILSTREAM *stream,char *ref,char *pat,char *contents)
@@ -2018,6 +2001,7 @@ graph_free_folders(GRAPH_USER_FOLDERS **foldersp)
 
    if((*foldersp)->id) fs_give((void **) &(*foldersp)->id);
    if((*foldersp)->displayName) fs_give((void **) &(*foldersp)->displayName);
+   if((*foldersp)->displayNameOrig) fs_give((void **) &(*foldersp)->displayNameOrig);
    if((*foldersp)->parentFolderId) fs_give((void **) &(*foldersp)->parentFolderId);
    if((*foldersp)->next) graph_free_folders(&(*foldersp)->next);
    fs_give((void **) foldersp);
@@ -2054,7 +2038,9 @@ graph_parse_folders_work(MAILSTREAM *stream, JSON_S *json)
      memset((void *) gfolders, 0, sizeof(GRAPH_USER_FOLDERS));
 
      json_assign ((void **) &gfolders->id, j, "id", JString);
-     json_assign ((void **) &gfolders->displayName, j, "displayName", JString);
+     json_assign ((void **) &gfolders->displayNameOrig, j, "displayName", JString);
+     if(gfolders->displayNameOrig)
+	gfolders->displayName = graph_filter_string(gfolders->displayNameOrig, NIL);
      json_assign ((void **) &gfolders->parentFolderId, j, "parentFolderId", JString);
      gfolders->childFolderCount = json_value_type(j, "childFolderCount", JLong);
      gfolders->unreadItemCount = json_value_type(j, "unreadItemCount", JLong);
