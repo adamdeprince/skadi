@@ -1245,6 +1245,12 @@ graph_auth (MAILSTREAM *stream,NETMBX *mb)
 	LOCAL->sensitive = T;
 	ok = (*at->client) (graph_challenge,graph_response,base,"graph",mb,stream,
 			    net_port(LOCAL->netstream),&trial,usr);
+
+	if(!stream || !LOCAL){
+	   mm_log ("GRAPH Authentication failed",ERROR);
+	   return NIL;
+	}
+
 	LOCAL->sensitive = NIL;
 
 	if(base && !trial){	/* do it now, instead of later */
