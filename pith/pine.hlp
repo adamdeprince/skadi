@@ -632,6 +632,12 @@ Additions include:
      protocols. Thanks to Geoffrey Bodwin for a report that lead to this
      implementation.
 
+<LI> When running in a kitty terminal, Alpine can display image attachments
+     and HTML inline images directly in the message viewer using the kitty
+     graphics protocol. This is controlled by
+     <a href="h_config_kitty_inline_images"><!--#echo var="FEAT_enable-kitty-inline-images"--></a>
+     (enabled by default).
+
 <LI> Alpine can pass an HTML message to an external web browser, by using the
      &quot;External&quot; command in the <a href="h_attachment_screen">ATTACHMENT INDEX</a>
      screen. <A href="h_command_external_browser">Learn more</A>.
@@ -5388,6 +5394,7 @@ There are also additional details on
 <li><a href="h_config_enable_incoming">FEATURE: <!--#echo var="FEAT_enable-incoming-folders"--></a>
 <li><a href="h_config_enable_incoming_checking">FEATURE: <!--#echo var="FEAT_enable-incoming-folders-checking"--></a>
 <li><a href="h_config_enable_jump">FEATURE: <!--#echo var="FEAT_enable-jump-shortcut"--></a>
+<li><a href="h_config_kitty_inline_images">FEATURE: <!--#echo var="FEAT_enable-kitty-inline-images"--></a>
 <li><a href="h_config_show_delay_cue">FEATURE: <!--#echo var="FEAT_enable-mail-check-cue"--></a>
 <li><a href="h_config_mailcap_params">FEATURE: <!--#echo var="FEAT_enable-mailcap-param-substitution"--></a>
 <li><a href="h_config_enable_mouse">FEATURE: <!--#echo var="FEAT_enable-mouse-in-xterm"--></a>
@@ -32277,6 +32284,32 @@ the link text might suggest a different destination.
 Setting this feature will prevent the server name from being appended
 to the displayed text.
 
+<P>
+&lt;End of help on this topic&gt;
+</BODY>
+</HTML>
+====== h_config_kitty_inline_images =====
+<HTML>
+<HEAD>
+<TITLE>FEATURE: <!--#echo var="FEAT_enable-kitty-inline-images"--></TITLE>
+</HEAD>
+<BODY>
+<H1>FEATURE: <!--#echo var="FEAT_enable-kitty-inline-images"--></H1>
+
+When this feature is enabled and Alpine is running in a kitty terminal,
+image attachments and HTML inline images (cid: and data: URIs) are
+drawn in the message text using kitty's graphics protocol.
+<P>
+Images are scaled to fit the current terminal size. Remote http(s) images
+are not fetched. If a decoder for a non-PNG image is needed, Alpine
+will try <TT>sips</TT>, <TT>magick</TT>, or <TT>convert</TT>.
+<P>
+This feature is on by default. Turn it off if you do not want images
+drawn in the viewer, or if your terminal does not implement the kitty
+graphics protocol.
+<P>
+Under tmux, passthrough must be allowed
+(<TT>set -g allow-passthrough on</TT>) for images to appear.
 <P>
 &lt;End of help on this topic&gt;
 </BODY>

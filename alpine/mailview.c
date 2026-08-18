@@ -62,6 +62,7 @@
 #include "../pith/busy.h"
 #include "../pith/list.h"
 #include "../pith/detach.h"
+#include "../pith/kittyimg.h"
 
 
 /*----------------------------------------------------------------------
@@ -295,6 +296,8 @@ mail_view_screen(struct pine *ps)
 	  ps->unseen_in_view = !mc->seen;
 
 	init_handles(&handles);
+	kitty_img_end_message();
+	kitty_img_begin_message();
 
 	store = so_get(src, NULL, EDIT_ACCESS);
 	so_truncate(store, format_size_guess(body) + 2048);
@@ -338,6 +341,13 @@ mail_view_screen(struct pine *ps)
 #endif
 
 	view_writec_destroy();
+
+	if(kitty_img_count() > 0){
+	    kitty_img_paint_text((char *) so_text(store),
+				 SCROLL_LINES_ABOVE(ps),
+				 SCROLL_LINES(ps), handles);
+	    clear_cursor_pos();
+	}
 
 	last_message_viewed  = mn_get_cur(ps->msgmap);
 	last_was_full_header = ps->full_header;
@@ -472,6 +482,7 @@ mail_view_screen(struct pine *ps)
 	ps_global->unseen_in_view = 0;
 	so_give(&store);	/* free resources associated with store */
 	free_handles(&handles);
+	kitty_img_end_message();
 #ifdef	_WINDOWS
 	mswin_destroyicons();
 #endif
@@ -4169,6 +4180,13 @@ redraw_scroll_text(void)
 		      st->line_lengths[offset + i], st->parms->text.handles);
     }
 
+    if(kitty_img_count() > 0){
+	kitty_img_paint_lines(st->text_lines, st->line_lengths, offset,
+			      st->screen.start_line, st->screen.length,
+			      st->parms->text.handles);
+	clear_cursor_pos();
+    }
+
 
     fflush(stdout);
 #ifdef _WINDOWS
@@ -4635,6 +4653,15 @@ scroll_scroll_text(long int new_top_line, HANDLE_S *handle, int redraw)
 	    st->parms->text.handles = handle;	/* update current */
 	}
 
+	if(kitty_img_count() > 0){
+	    long off = (st->parms->text.src == FileStar) ? 0 : st->top_text_line;
+
+	    kitty_img_paint_lines(st->text_lines, st->line_lengths, off,
+				  st->screen.start_line, st->screen.length,
+				  handle ? handle : st->parms->text.handles);
+	    clear_cursor_pos();
+	}
+
 	return(new_top_line);
     }
 
@@ -4657,7 +4684,7 @@ scroll_scroll_text(long int new_top_line, HANDLE_S *handle, int redraw)
        Check out the scrolling situation. If we want to scroll, but BeginScroll
        says we can't then repaint,  + 10 is so we repaint most of the time.
       ----*/
-    if(redraw ||
+    if(redraw || kitty_img_count() > 0 ||
        (st->top_text_line - new_top_line + 10 >= num_display_lines ||
         new_top_line - st->top_text_line + 10 >= num_display_lines) ||
 	BeginScroll(st->screen.start_line,

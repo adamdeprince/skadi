@@ -50,6 +50,7 @@
 #include "../pith/url.h"
 #include "../pith/init.h"
 #include "../pith/help.h"
+#include "../pith/kittyimg.h"
 #include "../pico/keydefs.h"
 
 #ifdef _WINDOWS
@@ -4487,12 +4488,34 @@ html_img(HANDLER_S *hd, int ch, int cmd)
 	       if(RELATED_OK(hd->html_data)
 	          && struncmp(src, "cid:", 4) == 0){
 		  char      buf[32];
-		  int	      i, n;
+		  int	      i, n, rows = 0, cols = 0, kid = 0;
 		  HANDLE_S *h = new_handle(HANDLESP(hd->html_data));
 
 		  h->type	 = IMG;
 		  h->h.img.src = cpystr(src + 4);
 		  h->h.img.alt = cpystr((alt) ? alt : "Attached Image");
+
+		  if(kitty_img_enabled() && !STRIP(hd->html_data))
+		    kid = kitty_img_from_cid(src + 4, &rows, &cols);
+
+		  if(kid > 0){
+		      h->h.img.kitty_id = kid;
+		      h->h.img.rows     = rows;
+		      h->h.img.cols     = cols;
+		      html_output(hd->html_data, HTML_NEWLINE);
+		      html_output(hd->html_data, TAG_EMBED);
+		      html_output(hd->html_data, TAG_HANDLE);
+		      snprintf(buf, sizeof(buf), "%d", h->key);
+		      n = strlen(buf);
+		      html_output(hd->html_data, n);
+		      for(i = 0; i < n; i++)
+			html_output(hd->html_data, (unsigned char) buf[i]);
+
+		      html_blank(hd->html_data, rows);
+		      html_output(hd->html_data, TAG_EMBED);
+		      html_output(hd->html_data, TAG_HANDLEOFF);
+		      return(0);
+		  }
 
 		  HTML_TEXT(hd->html_data, TAG_EMBED);
 		  HTML_TEXT(hd->html_data, TAG_HANDLE);
@@ -4509,12 +4532,34 @@ html_img(HANDLER_S *hd, int ch, int cmd)
 	       }
 	       else if(struncmp(src, "data:", 5) == 0){
 		  char      buf[32];
-		  int	      i, n;
+		  int	      i, n, rows = 0, cols = 0, kid = 0;
 		  HANDLE_S *h = new_handle(HANDLESP(hd->html_data));
 
 		  h->type	 = imgData;
 		  h->h.img.src = cpystr(src + 5);
 		  h->h.img.alt = cpystr((alt) ? alt : "Embedded Image");
+
+		  if(kitty_img_enabled() && !STRIP(hd->html_data))
+		    kid = kitty_img_from_data_uri(src, &rows, &cols);
+
+		  if(kid > 0){
+		      h->h.img.kitty_id = kid;
+		      h->h.img.rows     = rows;
+		      h->h.img.cols     = cols;
+		      html_output(hd->html_data, HTML_NEWLINE);
+		      html_output(hd->html_data, TAG_EMBED);
+		      html_output(hd->html_data, TAG_HANDLE);
+		      snprintf(buf, sizeof(buf), "%d", h->key);
+		      n = strlen(buf);
+		      html_output(hd->html_data, n);
+		      for(i = 0; i < n; i++)
+			html_output(hd->html_data, (unsigned char) buf[i]);
+
+		      html_blank(hd->html_data, rows);
+		      html_output(hd->html_data, TAG_EMBED);
+		      html_output(hd->html_data, TAG_HANDLEOFF);
+		      return(0);
+		  }
 
 		  HTML_TEXT(hd->html_data, TAG_EMBED);
 		  HTML_TEXT(hd->html_data, TAG_HANDLE);

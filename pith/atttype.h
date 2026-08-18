@@ -25,6 +25,7 @@ typedef struct attachment {
     unsigned	can_display:4;
     unsigned	shown:1;
     unsigned	suppress_editorial:1;
+    unsigned	kitty_shown:1;
     char	*cid_tmpfile;
     char	*tmpdir;
     char       *number;

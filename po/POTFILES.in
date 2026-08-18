@@ -122,6 +122,7 @@ pith/osdep/writ_dir.c
 pith/osdep/creatdir.c
 pith/osdep/pipe.c
 pith/mailview.c
+pith/kittyimg.c
 pith/init.c
 pith/takeaddr.c
 pith/keyword.c

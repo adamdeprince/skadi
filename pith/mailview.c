@@ -51,6 +51,7 @@
 #include "../pith/escapes.h"
 #include "../pith/keyword.h"
 #include "../pith/smime.h"
+#include "../pith/kittyimg.h"
 
 
 #define FBUF_LEN	(50)
@@ -817,6 +818,29 @@ format_body(long int msgno, BODY *body, HANDLE_S **handlesp, HEADER_S *hp, int f
 	    }
 
 	    if(!a->shown) {
+		if(a->body && a->body->type == TYPEIMAGE
+		   && (flgs & FM_DISPLAY) && handlesp
+		   && kitty_img_enabled()
+		   && !a->kitty_shown){
+		    int rows = 0, cols = 0, kid;
+
+		    kid = kitty_img_from_part(a, msgno, &rows, &cols);
+		    if(kid > 0){
+			if(!(flgs & FM_NOEDITORIAL)
+			   && (!gf_puts(NEWLINE, pc)
+			       || part_desc(a->number, a->body, 0, width,
+					    flgs, pc)))
+			  return("Write Error");
+
+			if(!kitty_img_emit_block(pc, handlesp, kid, rows, cols,
+						 a->description))
+			  return("Write Error");
+
+			a->shown = 1;
+			continue;
+		    }
+		}
+
 		if(a->suppress_editorial)
 		  continue;
 
