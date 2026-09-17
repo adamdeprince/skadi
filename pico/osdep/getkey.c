@@ -16,6 +16,12 @@
 #include <general.h>
 #include <ctype.h>
 #include <string.h>
+#include <stdlib.h>
+#ifndef _WINDOWS
+#include <errno.h>
+#include <sys/time.h>
+#include <sys/select.h>
+#endif
 
 #include "../estruct.h"
 #include "../mode.h"
@@ -25,6 +31,7 @@
 #include "../keydefs.h"
 
 #include "tty.h"
+#include "raw.h"
 #include "getkey.h"
 #include "read.h"
 #include "mouse.h"
@@ -62,7 +69,8 @@ get_input_timeout(void)
 void		bail(void);
 int		ReadyForKey(int);
 static int	key_to_meta_letter(int);
-static int	option_glyph_to_letter(int);
+static int	kb_ready_ms(int);
+static void	kb_swallow_string(int);
 
 
 
@@ -74,12 +82,37 @@ bail(void)
 }
 
 
-#define	PASTE_MAX	8192
+/*
+ * Bracketed paste.  The whole paste is collected into this queue and
+ * handed out one character at a time, so pasted text never spills
+ * into the normal key path and control characters in it never run
+ * editor commands.
+ */
+static UCS *paste_q = NULL;
+static int  paste_alloc = 0;
+static int  paste_n = 0;
+static int  paste_i = 0;
+static int  paste_fresh = 0;
 
-static UCS paste_q[PASTE_MAX];
-static int paste_n = 0;
-static int paste_i = 0;
-static int paste_fresh = 0;
+
+static int
+paste_push(UCS c)
+{
+    if(paste_n + 1 >= paste_alloc){
+	int  na = paste_alloc ? paste_alloc * 2 : 4096;
+	UCS *nq = (UCS *) realloc(paste_q, na * sizeof(UCS));
+
+	if(!nq)
+	  return(0);
+
+	paste_q = nq;
+	paste_alloc = na;
+    }
+
+    paste_q[paste_n++] = c;
+    paste_q[paste_n] = 0;
+    return(1);
+}
 
 
 int
@@ -121,29 +154,71 @@ pico_paste_queued(void)
 }
 
 
+/*
+ * Next pasted character for the composer.  Newline and tab come back
+ * as the ^M and ^I commands that insert them; any other control
+ * character is dropped, so a paste can never run an editor command.
+ * Returns 0 when nothing is left.
+ */
 UCS
 pico_paste_take(void)
 {
-    UCS c;
+    while(paste_i < paste_n){
+	UCS c = paste_q[paste_i++];
 
-    if(paste_i >= paste_n)
-      return(0);
+	if(c == '\r'){
+	    if(paste_i < paste_n && paste_q[paste_i] == '\n')
+	      paste_i++;
 
-    c = paste_q[paste_i++];
-    if(c == '\r'){
-	if(paste_i < paste_n && paste_q[paste_i] == '\n')
-	  paste_i++;
+	    return(CTRL | 'M');
+	}
 
-	return(CTRL | 'M');
+	if(c == '\n')
+	  return(CTRL | 'M');
+
+	if(c == '\t')
+	  return(CTRL | 'I');
+
+	if(c < 0x20 || c == 0x7F)
+	  continue;
+
+	return(c);
     }
 
-    if(c == '\n')
-      return(CTRL | 'M');
+    return(0);
+}
 
-    if(c >= 0x00 && c <= 0x1F)
-      return(CTRL | (c + '@'));
 
-    return(c);
+/*
+ * Same, for Alpine's own screens and prompts, which compare against
+ * raw C0 bytes rather than pico's CTRL|letter form.
+ */
+UCS
+pico_paste_take_raw(void)
+{
+    while(paste_i < paste_n){
+	UCS c = paste_q[paste_i++];
+
+	if(c == '\r'){
+	    if(paste_i < paste_n && paste_q[paste_i] == '\n')
+	      paste_i++;
+
+	    return('\r');
+	}
+
+	if(c == '\n')
+	  return('\r');
+
+	if(c == '\t')
+	  return('\t');
+
+	if(c < 0x20 || c == 0x7F)
+	  continue;
+
+	return(c);
+    }
+
+    return(0);
 }
 
 
@@ -157,8 +232,9 @@ pico_paste_collect(int (*getcfunc)(int (*)(int), void (*)(void)),
     paste_n = paste_i = 0;
     paste_fresh = 0;
 
-    while(paste_n < PASTE_MAX - 1){
-	if(!ReadyForKey(1))
+    for(;;){
+	/* a paste arrives in one go; a long stall means the end marker is lost */
+	if(!ReadyForKey(3))
 	  break;
 
 	status = kbseq(getcfunc, recorder, bail_handler, data, &ch);
@@ -168,13 +244,13 @@ pico_paste_collect(int (*getcfunc)(int (*)(int), void (*)(void)),
 	if(status == KEY_PASTE_START)
 	  continue;
 
-	if(status == 0 && ch)
-	  paste_q[paste_n++] = ch;
-	else
-	  break;
+	if(status == 0){
+	    if(ch && !paste_push(ch))
+	      break;
+	}
+	/* anything else (function keys, terminal replies) is not text */
     }
 
-    paste_q[paste_n] = 0;
     paste_fresh = (paste_n > 0);
     return(paste_n);
 }
@@ -237,8 +313,11 @@ GetKey(void)
 {
     UCS ch, status, cc;
 
-    if(pico_paste_queued())
-      return(pico_paste_take());
+    if(pico_paste_queued()){
+	UCS pc = pico_paste_take();
+
+	return(pc ? pc : NODATA);
+    }
 
     if(!ReadyForKey(FUDGE-5))
       return(NODATA);
@@ -246,8 +325,11 @@ GetKey(void)
     switch(status = kbseq(simple_ttgetc, NULL, bail, input_cs, &ch)){
       case KEY_PASTE_START:
 	pico_paste_collect(simple_ttgetc, NULL, bail, input_cs);
-	if(pico_paste_queued())
-	  return(pico_paste_take());
+	if(pico_paste_queued()){
+	    UCS pc = pico_paste_take();
+
+	    return(pc ? pc : NODATA);
+	}
 
 	return(NODATA);
 
@@ -431,24 +513,10 @@ GetKey(void)
 	break;
 
       case KEY_OSC:
-	{
-	    int prev = 0;
-
-	    for(;;){
-		if(!ReadyForKey(2))
-		  break;
-
-		ch = (*term.t_getchar)(NODATA, NULL, bail);
-		if(ch == '\007')
-		  break;
-
-		if(prev == '\033' && ch == '\\')
-		  break;
-
-		prev = ch;
-	    }
-	}
-
+      case KEY_APC:
+      case KEY_DCS:
+	/* a reply from the terminal, not a key */
+	kb_swallow_string(status == KEY_OSC);
 	return(NODATA);
 
       case BADESC:
@@ -491,7 +559,58 @@ GetKey(void)
  *           The escaped function.
  *           0 if a regular char with char stuffed in location c.
  */
-#define KB_SEQMAX 64
+#define KB_SEQMAX	64
+#define KB_ESC_MS	50		/* ESC then a key within this is Alt+key */
+
+
+/*
+ * Is there input within ms milliseconds?
+ */
+static int
+kb_ready_ms(int ms)
+{
+    fd_set rfds;
+    struct timeval tv;
+    int res;
+
+    for(;;){
+	FD_ZERO(&rfds);
+	FD_SET(STDIN_FD, &rfds);
+	tv.tv_sec = ms / 1000;
+	tv.tv_usec = (ms % 1000) * 1000;
+	res = select(STDIN_FD + 1, &rfds, NULL, NULL, &tv);
+	if(res < 0 && errno == EINTR)
+	  continue;
+
+	return(res > 0);
+    }
+}
+
+
+/*
+ * Discard a control string (OSC, APC, DCS, PM, SOS) the terminal sent
+ * us, up to the string terminator ESC \ (or BEL for OSC).
+ */
+static void
+kb_swallow_string(int bel_ends)
+{
+    int prev = 0, c;
+
+    for(;;){
+	if(!ReadyForKey(2))
+	  break;
+
+	c = (*term.t_getchar)(NODATA, NULL, bail);
+	if(bel_ends && c == '\007')
+	  break;
+
+	if(prev == '\033' && c == '\\')
+	  break;
+
+	prev = c;
+    }
+}
+
 
 static int
 kb_csi_final(unsigned char c)
@@ -499,61 +618,24 @@ kb_csi_final(unsigned char c)
     return(c >= 0x40 && c <= 0x7e);
 }
 
-
-/*
- * macOS Option+letter glyphs (US layout).  Not Shift, not ASCII.
- */
-static int
-option_glyph_to_letter(int key)
-{
-    switch(key){
-      case 0x222B:			/* ∫  option+b */
-	return('b');
-      case 0x02C6:			/* ˆ  option+i */
-	return('i');
-      case 0x00A8:			/* ¨  option+u */
-	return('u');
-      case 0x00DF:			/* ß  option+s */
-	return('s');
-      case 0x00E7:			/* ç  option+c */
-	return('c');
-      case 0x02D9:			/* ˙  option+h */
-	return('h');
-      case 0x0153:			/* œ  option+q */
-	return('q');
-      case 0x03C0:			/* π  option+p */
-	return('p');
-      case 0x00AE:			/* ®  option+r */
-	return('r');
-      case 0x00AC:			/* ¬  option+l */
-	return('l');
-      case 0x00F8:			/* ø  option+o */
-	return('o');
-      case 0x02DA:			/* ˚  option+k */
-	return('k');
-      default:
-	return(0);
-    }
-}
+/* CSI-DECODE-BEGIN: keep this region free of pico dependencies (see harness) */
 
 
 /*
- * Map a keycap or macOS Option-composed character to a markup letter.
- * ASCII a-z is for CSI u / modifyOtherKeys, not for unmodded typing.
+ * The letter an Alt/Ctrl shortcut is about, or 0.  Only ASCII letters;
+ * macOS Option-composed glyphs are ordinary text (tell kitty to use
+ * the Option key as Alt if you want Alt shortcuts there).
  */
 static int
 key_to_meta_letter(int key)
 {
-    int glyph;
-
     if(key >= 'A' && key <= 'Z')
       key = key - 'A' + 'a';
 
     if(key >= 'a' && key <= 'z')
       return(key);
 
-    glyph = option_glyph_to_letter(key);
-    return(glyph);
+    return(0);
 }
 
 
@@ -564,7 +646,9 @@ kb_parse_int(char **pp, char *end)
     int   v = 0, got = 0;
 
     while(p < end && *p >= '0' && *p <= '9'){
-	v = v * 10 + (*p - '0');
+	if(v < 10000000)			/* no key code is that large */
+	  v = v * 10 + (*p - '0');
+
 	p++;
 	got = 1;
     }
@@ -574,18 +658,68 @@ kb_parse_int(char **pp, char *end)
 }
 
 
+/*
+ * Kitty reports keypad and other functional keys with private-use
+ * code points.  Map the keypad to what its keys mean; anything else
+ * (lock keys, media keys, F13 and up) is not a key we use.
+ */
 static UCS
-kb_map_mod_key(int key, int mod, UCS *ch)
+kb_keypad_key(int key, UCS *ch)
 {
-    int bits, alt, ctrl, letter;
+    static const char kp[] = "0123456789./*-+\r=,";
+
+    if(key >= 57399 && key <= 57416){
+	*ch = (UCS) kp[key - 57399];
+	return(0);
+    }
+
+    switch(key){
+      case 57417: return(KEY_LEFT);
+      case 57418: return(KEY_RIGHT);
+      case 57419: return(KEY_UP);
+      case 57420: return(KEY_DOWN);
+      case 57421: return(KEY_PGUP);
+      case 57422: return(KEY_PGDN);
+      case 57423: return(KEY_HOME);
+      case 57424: return(KEY_END);
+      case 57426: return(KEY_DEL);
+      default:    return(BADESC);
+    }
+}
+
+
+/*
+ * key is the unicode key code, shifted the shifted variant the
+ * terminal reported (0 if none), mod the CSI modifier value (1 = none).
+ * Returns a status like kbseq: 0 with *ch set, META|letter, CTRL|x,
+ * or BADESC.
+ */
+static UCS
+kb_map_mod_key(int key, int shifted, int mod, UCS *ch)
+{
+    int bits, shift, alt, ctrl, letter, k;
 
     if(mod < 1)
       mod = 1;
 
     bits = mod - 1;
+    shift = bits & 1;
     alt = bits & 2;
     ctrl = bits & 4;
+
+    /* Backspace is Backspace whatever is held down with it */
+    if(key == 127 || key == 8){
+	*ch = 0x7F;
+	return(0);
+    }
+
     letter = key_to_meta_letter(key);
+
+    /*
+     * Ctrl+Shift+6 comes as key '6' with shifted key '^'; punctuation
+     * shortcuts want the shifted character, letters do not care.
+     */
+    k = (shift && shifted > 0 && !letter) ? shifted : key;
 
     if(alt && letter)
       return(META | letter);
@@ -594,16 +728,23 @@ kb_map_mod_key(int key, int mod, UCS *ch)
 	if(letter)
 	  return(CTRL | (letter - 'a' + 'A'));
 
-	/* CSI u sometimes reports Ctrl+C as key 3 rather than 99 */
-	if(key >= 1 && key <= 26)
-	  return(CTRL | ('A' + key - 1));
+	/* some terminals report Ctrl+C as key 3 rather than 99 */
+	if(k >= 1 && k <= 26)
+	  return(CTRL | ('A' + k - 1));
 
-	if(key >= 32 && key < 127)
-	  return(CTRL | ((key >= 'a' && key <= 'z')
-			 ? (key - 'a' + 'A') : key));
+	if(k == ' ')
+	  return(CTRL | '@');
+
+	if(k >= 0x40 && k <= 0x5F)		/* @ [ \ ] ^ _ */
+	  return(CTRL | k);
+
+	if(k >= 0x60 && k <= 0x7E)		/* ` { | } ~ share the row above */
+	  return(CTRL | (k - 0x20));
+
+	return(BADESC);
     }
 
-    if(alt || ctrl)
+    if(alt)
       return(BADESC);
 
     if(key == 27){
@@ -621,11 +762,8 @@ kb_map_mod_key(int key, int mod, UCS *ch)
 	return(0);
     }
 
-    if(key == 127 || key == 8)
-      return(0x7F);
-
-    if(key >= 32 && key < 127){
-	*ch = (UCS) key;
+    if(k >= 32){
+	*ch = (UCS) k;
 	return(0);
     }
 
@@ -636,16 +774,14 @@ kb_map_mod_key(int key, int mod, UCS *ch)
 /*
  * Kitty keyboard protocol: CSI key:shifted:base ; mods:event ; text u
  * xterm modifyOtherKeys:   CSI 27 ; mods ; key ~
- *
- * On macOS, Option+b may show up as key 98 (b), as ∫ (U+222B), or as
- * 98 with ∫ in the associated-text field.  Any of those is Alt+b.
+ * plus the legacy CSI 1 ; mods X and CSI n ; mods ~ forms.
  */
 static UCS
 kb_decode_csi(unsigned char *seq, int n, UCS *ch)
 {
     char *p, *end;
     int   keys[4], nk = 0, mod = 1, ev = 1, text = 0, final;
-    int   i, letter, key;
+    int   key, shifted, base;
 
     if(n < 3 || seq[0] != '\033' || seq[1] != '[')
       return(BADESC);
@@ -695,27 +831,63 @@ kb_decode_csi(unsigned char *seq, int n, UCS *ch)
     if(ev == 3)				/* key-release */
       return(NODATA);
 
-    if(final == '~' && keys[0] == 27){
-	/* CSI 27 ; mod ; key ~  — key is in the third field (text here) */
-	return(kb_map_mod_key(text, mod, ch));
+    if(final == '~' && nk == 1 && keys[0] == 27 && text > 0){
+	/* xterm modifyOtherKeys: CSI 27 ; mod ; key ~ */
+	return(kb_map_mod_key(text, 0, mod, ch));
+    }
+
+    if(strchr("ABCDHF", final) && (nk == 0 || keys[0] == 1)){
+	/* CSI 1 ; mod X: cursor keys with modifiers */
+	int ctrl = (mod - 1) & 4;
+
+	switch(final){
+	  case 'A': return(ctrl ? CTRL_KEY_UP : KEY_UP);
+	  case 'B': return(ctrl ? CTRL_KEY_DOWN : KEY_DOWN);
+	  case 'C': return(ctrl ? CTRL_KEY_RIGHT : KEY_RIGHT);
+	  case 'D': return(ctrl ? CTRL_KEY_LEFT : KEY_LEFT);
+	  case 'H': return(KEY_HOME);
+	  case 'F': return(KEY_END);
+	}
+    }
+
+    if(final == '~' && nk == 1){
+	/* CSI n ; mod ~: editing keys with modifiers */
+	switch(keys[0]){
+	  case 1: case 7: return(KEY_HOME);
+	  case 3: return(KEY_DEL);
+	  case 4: case 8: return(KEY_END);
+	  case 5: return(KEY_PGUP);
+	  case 6: return(KEY_PGDN);
+	  default: return(BADESC);
+	}
     }
 
     if(final != 'u')
       return(BADESC);
 
-    letter = 0;
-    for(i = 0; i < nk && !letter; i++)
-      letter = key_to_meta_letter(keys[i]);
-
-    if(!letter && text)
-      letter = key_to_meta_letter(text);
-
     key = (nk > 0) ? keys[0] : 0;
-    if(letter)
-      key = letter;
+    shifted = (nk > 1) ? keys[1] : 0;
+    base = (nk > 2) ? keys[2] : 0;
+    if(key == 0 && text > 0)
+      key = text;
 
-    return(kb_map_mod_key(key, mod, ch));
+    /*
+     * With a non-Latin layout the base-layout key carries the letter
+     * a shortcut is named after.
+     */
+    if(((mod - 1) & 6) && !key_to_meta_letter(key) && key_to_meta_letter(base))
+      key = base;
+
+    if(key >= 57344 && key <= 63743)		/* kitty functional keys */
+      return(kb_keypad_key(key, ch));
+
+    if(key > 0x10FFFF || shifted > 0x10FFFF)
+      return(BADESC);
+
+    return(kb_map_mod_key(key, shifted, mod, ch));
 }
+
+/* CSI-DECODE-END */
 
 
 static UCS
@@ -771,6 +943,15 @@ kbseq(int (*getcfunc)(int (*recorder)(int ), void (*bail_handler)(void )),
 	c = (*getcfunc)(recorder, bail_handler);
 	if(nseen < KB_SEQMAX - 1)
 	  seen[nseen++] = c;
+
+	/*
+	 * ESC followed by nothing within KB_ESC_MS is the Escape key,
+	 * not the start of an Alt+key or terminal sequence.
+	 */
+	if(first && c == '\033' && !kb_ready_ms(KB_ESC_MS)){
+	    *ch = 27;
+	    return(0);
+	}
 
 	while(current->value != c){
 	    if(current->left == NULL){		/* NO MATCH */
@@ -970,6 +1151,12 @@ pico_paste_queued(void)
 
 UCS
 pico_paste_take(void)
+{
+    return(0);
+}
+
+UCS
+pico_paste_take_raw(void)
 {
     return(0);
 }

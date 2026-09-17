@@ -18,6 +18,9 @@
 #define PINE_OSDEP_TERMOUT_UNX_INCLUDED
 
 
+void	term_hyperlink_at(int, int, char *, char *, int);
+
+
 /* exported prototypes */
 
 

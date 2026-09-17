@@ -546,36 +546,200 @@ try_wantto:
    }
 }
 
-static void
-oauth2_open_browser(char *url)
+/*
+ * Alpine is being used through an ssh session: a browser started here
+ * would open on the wrong machine, and the loopback listener is not
+ * reachable from the user's machine unless the port is forwarded.
+ */
+static int
+running_over_ssh(void)
+{
+    return(getenv("SSH_CONNECTION") != NULL || getenv("SSH_TTY") != NULL
+	   || getenv("SSH_CLIENT") != NULL);
+}
+
+
+static int
+find_in_path(const char *prog, char *buf, size_t buflen)
+{
+    char *path = getenv("PATH"), *p, *q;
+    size_t n;
+
+    if(!path)
+      path = "/usr/bin:/bin:/usr/local/bin";
+
+    for(p = path; p && *p; p = q ? q + 1 : NULL){
+	q = strchr(p, ':');
+	n = q ? (size_t) (q - p) : strlen(p);
+	if(n == 0 || n + strlen(prog) + 2 > buflen)
+	  continue;
+
+	memcpy(buf, p, n);
+	buf[n] = '/';
+	strcpy(buf + n + 1, prog);
+	if(access(buf, X_OK) == 0)
+	  return(1);
+    }
+
+    buf[0] = '\0';
+    return(0);
+}
+
+
+/*
+ * Start a browser on url.  Returns 0 when one was started, -1 when it
+ * was not, with the reason in why.
+ */
+static int
+oauth2_open_browser(char *url, char *why, size_t whylen)
 {
 #ifndef _WINDOWS
     pid_t pid;
+    char  prog[MAXPATH+1];
+    const char *name;
 
+    why[0] = '\0';
     if(!url || !*url)
-      return;
+      return(-1);
+
+    if(running_over_ssh()){
+	strncpy(why, _("running over ssh, so no browser was started here"), whylen - 1);
+	why[whylen - 1] = '\0';
+	return(-1);
+    }
 
     if(ps_global->VAR_BROWSER && ps_global->VAR_BROWSER[0]
        && ps_global->VAR_BROWSER[0][0]){
-	(void) do_url_launch(ps_global->VAR_BROWSER[0], url);
-	return;
+	if(do_url_launch(ps_global->VAR_BROWSER[0], url) == 0)
+	  return(0);
+
+	snprintf(why, whylen, _("could not run %.60s"), ps_global->VAR_BROWSER[0]);
+	return(-1);
+    }
+
+#ifdef __APPLE__
+    name = "open";
+#else
+    name = "xdg-open";
+    if(!getenv("DISPLAY") && !getenv("WAYLAND_DISPLAY")){
+	strncpy(why, _("no display to open a browser on"), whylen - 1);
+	why[whylen - 1] = '\0';
+	return(-1);
+    }
+#endif
+
+    if(!find_in_path(name, prog, sizeof(prog))){
+	snprintf(why, whylen, _("%s was not found in your PATH"), name);
+	return(-1);
     }
 
     pid = fork();
+    if(pid < 0){
+	strncpy(why, _("could not start a process for the browser"), whylen - 1);
+	why[whylen - 1] = '\0';
+	return(-1);
+    }
+
     if(pid == 0){
 	pid_t g = fork();
+
 	if(g > 0)
 	  _exit(0);
-#ifdef __APPLE__
-	execl("/usr/bin/open", "open", url, (char *) NULL);
-#else
-	execl("/usr/bin/xdg-open", "xdg-open", url, (char *) NULL);
-#endif
+
+	execl(prog, name, url, (char *) NULL);
 	_exit(127);
     }
-    else if(pid > 0)
-      (void) waitpid(pid, NULL, 0);
+
+    (void) waitpid(pid, NULL, 0);
+    return(0);
+#else
+    strncpy(why, _("no browser launcher on this platform"), whylen - 1);
+    why[whylen - 1] = '\0';
+    return(-1);
 #endif
+}
+
+
+/*
+ * While the authorization screen is up, read_char calls this before
+ * every wait.  It repaints the clickable link on the blank row under
+ * the title bar and looks at the loopback listener; when the browser
+ * has come back with a code it hands read_char the key that leaves the
+ * screen, and the code is picked up afterwards.
+ */
+static UCS   oauth2_hook_key = 0;
+static char *oauth2_hook_code = NULL;
+static char *oauth2_hook_url = NULL;
+static char  oauth2_hook_lasterr[256];
+
+static UCS
+oauth2_idle_hook(void)
+{
+    char *code;
+    const char *err;
+
+#ifndef _WINDOWS
+    if(oauth2_hook_url && ps_global->ttyo && HEADER_ROWS(ps_global) >= 2)
+      term_hyperlink_at(HEADER_ROWS(ps_global) - 1, 0, oauth2_hook_url,
+			_("  Sign in: click this line (Ctrl+Shift+click if the mouse is on) to open the authorization page"),
+			ps_global->ttyo->screen_cols);
+#endif
+
+    if(!oauth2_loopback_active())
+      return(0);
+
+    code = oauth2_loopback_poll(0);
+    if(code){
+	if(oauth2_hook_code)
+	  fs_give((void **) &oauth2_hook_code);
+
+	oauth2_hook_code = code;
+	return(oauth2_hook_key);
+    }
+
+    err = oauth2_loopback_error();
+    if(err && strcmp(err, oauth2_hook_lasterr) != 0){
+	strncpy(oauth2_hook_lasterr, err, sizeof(oauth2_hook_lasterr) - 1);
+	oauth2_hook_lasterr[sizeof(oauth2_hook_lasterr) - 1] = '\0';
+	q_status_message(SM_ORDER | SM_DING, 3, 5, (char *) err);
+	flush_status_messages(1);
+    }
+
+    return(0);
+}
+
+
+static void
+oauth2_hook_install(UCS key, char *url)
+{
+    oauth2_hook_key = key;
+    oauth2_hook_lasterr[0] = '\0';
+    if(oauth2_hook_code)
+      fs_give((void **) &oauth2_hook_code);
+
+    if(oauth2_hook_url)
+      fs_give((void **) &oauth2_hook_url);
+
+    oauth2_hook_url = url ? cpystr(url) : NULL;
+#ifndef _WINDOWS
+    set_read_char_idle_hook(oauth2_idle_hook);
+#endif
+}
+
+
+static char *
+oauth2_hook_remove(void)
+{
+    char *code = oauth2_hook_code;
+
+#ifndef _WINDOWS
+    set_read_char_idle_hook(NULL);
+#endif
+    oauth2_hook_code = NULL;
+    if(oauth2_hook_url)
+      fs_give((void **) &oauth2_hook_url);
+
+    return(code);
 }
 
 
@@ -585,19 +749,23 @@ oauth2_get_access_code(unsigned char *url, char *method, OAUTH2_S *oauth2, NETMB
    char tmp[MAILTMPLEN];
    char *code = NULL;
 
+   char why[200];
+   int  browser_ok, loopback = oauth2_loopback_active(), ssh = running_over_ssh();
+
    dprint((2, "-- oauth2_get_access_code\n"));
    ps_global->in_xoauth2_auth = 1;
 
    /*
-    * Google redirects to http://127.0.0.1:port/ with the code.
-    * Catch it here so the user is not stuck on a dead localhost page.
+    * Show the screen first and never block on the network: the
+    * loopback listener is polled from the keyboard wait, and the
+    * user can always cancel or paste the code by hand.
     */
-   oauth2_open_browser((char *) url);
-   q_status_message(SM_ORDER, 3, 5,
-	_("Log in with Google in your browser. Alpine is waiting..."));
-   code = oauth2_loopback_wait(120);
-   if(code)
-     return(code);
+   browser_ok = (oauth2_open_browser((char *) url, why, sizeof(why)) == 0);
+   if(browser_ok)
+     q_status_message1(SM_ORDER, 0, 3,
+	_("Waiting for the browser to finish signing in to %s..."), oauth2->name);
+   else if(why[0])
+     q_status_message1(SM_ORDER, 3, 5, _("Browser not started: %s"), why);
 
    if(ps_global->ttyo){
 	SCROLL_S  sargs;
@@ -644,8 +812,25 @@ oauth2_get_access_code(unsigned char *url, char *method, OAUTH2_S *oauth2, NETMB
 	   so_puts(in_store, _(" Alternatively, you can copy and paste the previous link and open it with the browser of your choice."));
 
 	   so_puts(in_store, _("</P><P> After you open the previous link, you will be asked to authenticate and later to authorize access to Alpine. "));
-	   so_puts(in_store, _(" Alpine listens on localhost for Google's redirect. The browser should show &quot;Alpine is authorized&quot; and this screen will continue."));
-	   so_puts(in_store, _(" If that does not happen, copy the address-bar URL (it contains code=...) and press 'C' to paste it."));
+	   if(loopback){
+	      sprintf(tmp_20k_buf, _(" Alpine is listening at %s for the browser to come back with the authorization code, and this screen then continues by itself."), oauth2_loopback_redirect());
+	      so_puts(in_store, tmp_20k_buf);
+	      if(ssh){
+		 so_puts(in_store, _("</P><P> You are running Alpine over ssh, so the browser on your own machine can only reach that address if the port is forwarded, for example with"));
+		 sprintf(tmp_20k_buf, " <TT>ssh -R %u:localhost:%u <I>host</I></TT>.", oauth2_loopback_port(), oauth2_loopback_port());
+		 so_puts(in_store, tmp_20k_buf);
+		 so_puts(in_store, _(" Otherwise finish signing in, copy the address of the page you end up on (it contains <TT>code=</TT>), and press 'C' to paste it here."));
+	      }
+	      else if(browser_ok)
+		so_puts(in_store, _(" A browser should already be open on that page."));
+	      else
+		so_puts(in_store, _(" No browser was started here; open the link above yourself. If the redirect never arrives, copy the address of the page you end up on (it contains <TT>code=</TT>) and press 'C' to paste it."));
+	   }
+	   else{
+	      so_puts(in_store, _(" At the end of this process, you will be given an access code or redirected to a web page."));
+	      so_puts(in_store, _(" If you see a code, copy it and then press 'C', and enter the code at the prompt."));
+	      so_puts(in_store, _(" If you do not see a code, copy the url of the page you were redirected to and again press 'C' and copy and paste it into the prompt. "));
+	   }
 
 	   cache_method_message(in_store);
 	}
@@ -681,16 +866,24 @@ oauth2_get_access_code(unsigned char *url, char *method, OAUTH2_S *oauth2, NETMB
 	sargs.help.text     = h_oauth2_start;
 	sargs.help.title    = _("HELP FOR SETTING UP XOAUTH2");
 
+	memset(&user_input, 0, sizeof(user_input));
+
+	/* 'e' leaves the screen; the hook returns it when the code arrives */
+	oauth2_hook_install((UCS) 'e', (char *) url);
 	do {
-	   if(scrolltool(&sargs) == MC_NO)
+	   if(scrolltool(&sargs) == MC_NO && !oauth2_hook_code)
 	     ps_global->user_says_cancel = 1;
 	   ps_global->mangled_screen = 1;
 	   ps_global->painted_body_on_startup = 0;
 	   ps_global->painted_footer_on_startup = 0;
-	} while (user_input.answer != 'e');
+	} while (user_input.answer != 'e' && !oauth2_hook_code);
 
-	if(!struncmp(user_input.code, "http://", 7)
-	    || !struncmp(user_input.code, "https://", 8)){
+	code = oauth2_hook_remove();
+	if(code)
+	  ps_global->user_says_cancel = 0;
+	else if(user_input.code
+		&& (!struncmp(user_input.code, "http://", 7)
+		    || !struncmp(user_input.code, "https://", 8))){
 	     char *s, *t;
 	     s = strstr(user_input.code, "code=");
 	     if(s != NULL){
@@ -743,6 +936,14 @@ try_wantto:
 		"%s", _("After you open the previous link, you will be asked to authenticate and later to authorize access to Alpine."));
 	tmp_20k_buf[SIZEOF_20KBUF-1] = '\0';
 
+	if(loopback){
+	  snprintf(tmp_20k_buf+strlen(tmp_20k_buf), SIZEOF_20KBUF-strlen(tmp_20k_buf),
+		_(" Alpine is listening at %s for the browser to come back with the code%s.\n"),
+		oauth2_loopback_redirect(),
+		ssh ? _(" (over ssh that needs the port forwarded)") : "");
+	  tmp_20k_buf[SIZEOF_20KBUF-1] = '\0';
+	}
+
 	snprintf(tmp_20k_buf+strlen(tmp_20k_buf), SIZEOF_20KBUF-strlen(tmp_20k_buf),
 		"%s", _(" At the end of this process, you will be given an access code or redirected to a web page.\n"));
 	tmp_20k_buf[SIZEOF_20KBUF-1] = '\0';
@@ -766,7 +967,10 @@ try_wantto:
 	strncpy(tmp, _("Alpine would like to get authorization to access your email. Proceed "), sizeof(tmp));
 	tmp[sizeof(tmp)-1] = '\0';
 
-	if(want_to(tmp, 'n', 'x', NO_HELP, WT_NORM) == 'y'){
+	/* ^C cancels the prompt; the hook returns it when the code arrives */
+	oauth2_hook_install((UCS) ctrl('C'), NULL);
+	token[0] = '\0';
+	if(want_to(tmp, 'n', 'x', NO_HELP, WT_NORM) == 'y' && !oauth2_hook_code){
 	  q_line = -(ps_global->ttyo ? ps_global->ttyo->footer_rows : 3);
 	  flags = OE_APPEND_CURRENT;
 	  sprintf(prompt, "%s: ", accesscodelabel);
@@ -774,7 +978,12 @@ try_wantto:
 	     rc = optionally_enter(token, q_line, 0, MAILTMPLEN,
 			   prompt, NULL, NO_HELP, &flags);
 	  } while (rc != 0 && rc != 1);
-	  if(!struncmp(token, "http://", 7)
+	}
+
+	code = oauth2_hook_remove();
+	if(code)
+	  ;
+	else if(!struncmp(token, "http://", 7)
 	     || !struncmp(token, "https://", 8)){
 	     char *s, *t;
 	     s = strstr(token, "code=");
@@ -786,7 +995,6 @@ try_wantto:
 	     }
 	  }
 	  else code = token[0] ? cpystr(token) : NULL;
-	}
    }
 
    return code;
