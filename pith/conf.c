@@ -341,6 +341,10 @@ CONF_TXT_T cf_text_index_format[] =	"This gives a format for displaying the inde
 
 CONF_TXT_T cf_text_overlap[] =		"The number of lines of overlap when scrolling through message text";
 
+CONF_TXT_T cf_text_inline_image_size[] =	"Largest inline image thumbnail, as COLUMNSxROWS of terminal cells";
+
+CONF_TXT_T cf_text_inline_image_count[] =	"Most inline images drawn in one message (0 for no limit)";
+
 CONF_TXT_T cf_text_maxremstreams[] =	"The maximum number of non-stayopen remote connections that Alpine will use";
 
 CONF_TXT_T cf_text_permlocked[] =	"A list of folders that should be left open once opened (INBOX is implicit)";
@@ -691,6 +695,10 @@ static struct variable variables[] = {
 	"Extra Directories for Save", 	cf_text_history},
 {"max-remote-connections",		0, 1, 0, 1, 1, 0, 0, 0, 0, 1, 0,
 	"Maximum Remote Connections",	cf_text_maxremstreams},
+{"inline-image-max-size",		0, 1, 0, 1, 1, 0, 0, 0, 0, 1, 0,
+	"Inline Image Maximum Size",	cf_text_inline_image_size},
+{"inline-image-max-count",		0, 1, 0, 1, 1, 0, 0, 0, 0, 1, 0,
+	"Inline Image Maximum Count",	cf_text_inline_image_count},
 {"stay-open-folders",			0, 1, 0, 1, 1, 1, 0, 0, 0, 0, 0,
 	"Stayopen Folders",	cf_text_permlocked},
 {"incoming-check-timeout",		0, 1, 0, 1, 1, 0, 0, 0, 0, 1, 0,
@@ -1678,6 +1686,8 @@ init_vars(struct pine *ps, void (*cmds_f) (struct pine *, char **))
     GLO_LOCAL_ADDRESS		= cpystr(DF_LOCAL_ADDRESS);
     GLO_OVERLAP			= cpystr(DF_OVERLAP);
     GLO_MAXREMSTREAM		= cpystr(DF_MAXREMSTREAM);
+    GLO_INLINE_IMAGE_SIZE	= cpystr(DF_INLINE_IMAGE_SIZE);
+    GLO_INLINE_IMAGE_COUNT	= cpystr(DF_INLINE_IMAGE_COUNT);
     GLO_MARGIN			= cpystr(DF_MARGIN);
     GLO_FILLCOL			= cpystr(DF_FILLCOL);
     GLO_DEADLETS		= cpystr(DF_DEADLETS);
@@ -2732,6 +2742,8 @@ init_vars(struct pine *ps, void (*cmds_f) (struct pine *, char **))
     else
       ps->s_pool.max_remstream = i;
     
+    set_current_val(&vars[V_INLINE_IMAGE_SIZE], TRUE, TRUE);
+    set_current_val(&vars[V_INLINE_IMAGE_COUNT], TRUE, TRUE);
     set_current_val(&vars[V_PERMLOCKED], TRUE, TRUE);
 
     set_current_val(&vars[V_NMW_WIDTH], TRUE, TRUE);
@@ -7959,6 +7971,10 @@ config_help(int var, int feature)
 	return(h_config_viewer_overlap);
       case V_MAXREMSTREAM :
 	return(h_config_maxremstream);
+      case V_INLINE_IMAGE_SIZE :
+	return(h_config_inline_image_size);
+      case V_INLINE_IMAGE_COUNT :
+	return(h_config_inline_image_count);
       case V_PERMLOCKED :
 	return(h_config_permlocked);
       case V_MARGIN :

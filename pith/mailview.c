@@ -833,7 +833,7 @@ format_body(long int msgno, BODY *body, HANDLE_S **handlesp, HEADER_S *hp, int f
 			  return("Write Error");
 
 			if(!kitty_img_emit_block(pc, handlesp, kid, rows, cols,
-						 a->description))
+						 a, a->description))
 			  return("Write Error");
 
 			a->shown = 1;

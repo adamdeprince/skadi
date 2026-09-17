@@ -14,12 +14,54 @@
 /*======================================================================
 
      kittyimg.c
-     Display MIME images in the message viewer using the kitty
-     graphics protocol when available, otherwise sixels.  Preview
-     size is a cell box (at most KITTY_MAX_COLS by KITTY_MAX_ROWS);
-     cell pixel size is used only to rasterize into that box.
+     Display MIME images in the message viewer.
+
+     Images are decoded in-process with stb_image, resampled into a
+     thumbnail that fits a cell box, and kept in a small cache keyed by
+     message part (or data: URI) and cell size.  The formatted message
+     text carries a selectable "[Image: ...]" handle line followed by
+     the blank rows the thumbnail occupies.  Every screen paint places
+     the thumbnails on those rows with the kitty graphics protocol
+     (direct chunked transmission, so it works over ssh), iTerm2's
+     inline image sequence, or sixels.
 
   ====*/
+
+
+#ifndef	_WINDOWS
+/*
+ * The stb single-header libraries are compiled here, ahead of Alpine's
+ * own headers so that c-client's short macro names (T, NIL, ...) cannot
+ * collide with their identifiers.  Decoding is from memory only, the
+ * float/HDR and rarely used formats are compiled out, dimensions are
+ * capped, and the assertion macros are disabled so a malformed image
+ * can never abort the mail client.
+ */
+#include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
+
+#define STB_IMAGE_IMPLEMENTATION
+#define STBI_NO_STDIO
+#define STBI_NO_HDR
+#define STBI_NO_LINEAR
+#define STBI_NO_PIC
+#define STBI_NO_PSD
+#define STBI_NO_TGA
+#define STBI_NO_FAILURE_STRINGS
+#define STBI_MAX_DIMENSIONS	(1 << 15)
+#define STBI_ASSERT(x)		((void) 0)
+#include "stb_image.h"
+
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#define STBI_WRITE_NO_STDIO
+#define STBIW_ASSERT(x)		((void) 0)
+#include "stb_image_write.h"
+
+#define STB_IMAGE_RESIZE_IMPLEMENTATION
+#define STBIR_ASSERT(x)		((void) 0)
+#include "stb_image_resize2.h"
+#endif /* !_WINDOWS */
 
 
 #include "../pith/headers.h"
@@ -36,111 +78,178 @@
 
 #ifndef	_WINDOWS
 #include <sys/ioctl.h>
-#include <sys/wait.h>
 #include <sys/select.h>
+#include <sys/time.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <ctype.h>
 #include <errno.h>
-#include <string.h>
-#include <stdio.h>
 #endif
 
 
-#define	KITTY_MAX_BYTES		(3L * 1024L * 1024L)
+#ifdef	_WINDOWS
+
+/* No terminal graphics on Windows; keep the callers linking. */
+int	  kitty_img_enabled(void) { return(0); }
+int	  kitty_img_count(void) { return(0); }
+void	  kitty_img_begin_message(void) { }
+void	  kitty_img_end_message(void) { }
+void	  kitty_img_shutdown(void) { }
+void	  kitty_img_note_resize(void) { }
+int	  kitty_img_from_part(ATTACH_S *a, long m, int *r, int *c) { return(0); }
+int	  kitty_img_from_cid(char *s, int *r, int *c) { return(0); }
+int	  kitty_img_from_data_uri(char *s, int *r, int *c) { return(0); }
+ATTACH_S *kitty_img_attach_for_cid(char *s) { return(NULL); }
+int	  kitty_img_emit_block(gf_o_t pc, HANDLE_S **h, int k, int r, int c,
+			       ATTACH_S *a, char *alt) { return(0); }
+void	  kitty_img_paint_lines(char **l, short *n, long o, int s, int c,
+				long t, HANDLE_S *h) { }
+char *
+kitty_img_alt(char *alt, char *dst, size_t dstlen)
+{
+    if(dst && dstlen)
+      dst[0] = '\0';
+
+    return(dst);
+}
+
+#else /* !_WINDOWS */
+
+
+#define	KITTY_MAX_BYTES		(3L * 1024L * 1024L)	/* encoded bytes we decode */
+#define	KITTY_MAX_PIXELS	(40L * 1000L * 1000L)	/* decoded pixel budget */
+#define	KITTY_MIN_PIXELS	8			/* skip tracking pixels */
 #define	KITTY_ID_BASE		0xA10001u
-#define	KITTY_MAX_COLS		32
-#define	KITTY_MAX_ROWS		8
-#define	KITTY_MIN_COLS		1
-#define	KITTY_MIN_ROWS		1
+#define	KITTY_ID_LIMIT		0x7FFFFF00u
+#define	KITTY_DEF_COLS		32
+#define	KITTY_DEF_ROWS		8
+#define	KITTY_DEF_COUNT		12
+#define	KITTY_CACHE_MAX_BYTES	(24L * 1024L * 1024L)
+#define	KITTY_CACHE_MAX_ENTRIES	96
+#define	KITTY_CHUNK		4096
+#define	KITTY_ALT_MAX		60
 
 #define	GFX_UNKNOWN		(-1)
 #define	GFX_NONE		0
 #define	GFX_KITTY		1
-#define	GFX_SIXEL		2
+#define	GFX_ITERM		2
+#define	GFX_SIXEL		3
 
 
+/*
+ * A resampled thumbnail.  The canvas is exactly cols*cw by rows*ch
+ * pixels with the image drawn at the top left and transparent
+ * padding, so terminals never rescale it.
+ */
+typedef struct kitty_thumb_s {
+    char	  *key;
+    unsigned char *rgba;
+    int		   w, h;		/* canvas pixels */
+    int		   iw, ih;		/* image pixels inside the canvas */
+    int		   rows, cols;
+    unsigned char *png;			/* lazily encoded canvas */
+    size_t	   pnglen;
+    size_t	   bytes;
+    unsigned long  stamp;
+    struct kitty_thumb_s *next;
+} KITTY_THUMB_S;
+
+
+/* An image shown in the message being viewed. */
 typedef struct kitty_img_s {
-    unsigned	 id;
-    char	*png_path;
-    char	*src_path;
-    char	*sixel;
-    int		 rows;
-    int		 cols;
-    int		 px_w;
-    int		 px_h;
-    unsigned	 transmitted:1;
-    unsigned	 own_png:1;
-    unsigned	 own_src:1;
+    unsigned	   id;			/* kitty image id, unique for the session */
+    KITTY_THUMB_S *thumb;
+    int		   rows;
+    int		   cols;
+    unsigned	   transmitted:1;
 } KITTY_IMG_S;
 
 
-static KITTY_IMG_S *k_imgs = NULL;
-static int	    k_n = 0;
-static int	    k_alloc = 0;
-static unsigned	    k_next_id = KITTY_ID_BASE;
-static int	    k_gfx = GFX_UNKNOWN;
-static int	    k_cell_w = 8;
-static int	    k_cell_h = 16;
-static int	    k_cell_valid = 0;
+typedef struct kitty_sbuf_s {
+    char   *s;
+    size_t  n;
+    size_t  a;
+} KITTY_SBUF;
+
+
+static KITTY_THUMB_S *k_cache = NULL;
+static int	      k_cache_n = 0;
+static size_t	      k_cache_bytes = 0;
+static unsigned long  k_stamp = 0;
+
+static KITTY_IMG_S   *k_imgs = NULL;
+static int	      k_n = 0;
+static int	      k_alloc = 0;
+static unsigned	      k_next_id = KITTY_ID_BASE;
+
+static int	      k_gfx = GFX_UNKNOWN;
+static int	      k_cell_w = 8;
+static int	      k_cell_h = 16;
+static int	      k_cell_valid = 0;
+
+static int	      k_max_cols = KITTY_DEF_COLS;
+static int	      k_max_rows = KITTY_DEF_ROWS;
+static int	      k_max_count = KITTY_DEF_COUNT;
 
 
 /* internal prototypes */
-int	 kitty_detect_gfx(void);
-int	 kitty_env_kitty(void);
-int	 kitty_env_sixel(void);
-#ifndef	_WINDOWS
-int	 kitty_query_read(const char *, char *, int, int);
-int	 kitty_query_kitty(void);
-int	 kitty_query_sixel(void);
-int	 kitty_query_cell_csi(int *, int *);
-#endif
-int	 kitty_cell_pixels(int *, int *);
-void	 kitty_fit_preview(int, int, int *, int *, int *, int *);
-int	 kitty_read_u16be(unsigned char *);
-unsigned long kitty_read_u32be(unsigned char *);
-unsigned long kitty_read_u32le(unsigned char *);
-int	 kitty_read_u16le(unsigned char *);
-int	 kitty_dims_from_mem(unsigned char *, long, int *, int *);
-int	 kitty_dims_from_file(char *, int *, int *);
-int	 kitty_file_is_png(char *);
-char	*kitty_convert_to_png(char *, int, int);
-unsigned char *kitty_load_ppm(char *, int *, int *);
-unsigned char *kitty_load_bmp(char *, int *, int *);
-unsigned char *kitty_convert_to_rgb(char *, int, int, int *, int *);
-char	*kitty_sixel_encode(unsigned char *, int, int);
-char	*kitty_b64(const char *);
-#ifndef	_WINDOWS
-int	 kitty_run_cmd(char **);
-#endif
-int	 kitty_register(char *, char *, char *, int, int, int, int, int, int);
-KITTY_IMG_S *kitty_find(unsigned);
-void	 kitty_write_raw(const char *);
-void	 kitty_write_apc(const char *, const char *);
-void	 kitty_transmit(KITTY_IMG_S *);
-void	 kitty_delete_id(unsigned, int);
-void	 kitty_hide_placements(void);
-void	 kitty_place(int, int, KITTY_IMG_S *);
-void	 kitty_place_sixel(int, int, KITTY_IMG_S *);
-int	 kitty_handle_on_line(char *, int, HANDLE_S *, HANDLE_S **);
-long	 kitty_current_rawno(void);
-int	 kitty_extract_part(ATTACH_S *, long, char **);
-int	 kitty_decode_data_uri(char *, char **);
-void	 kitty_reset_shown(void);
-int	 kitty_prep_from_file(char *, int, int *, int *);
+static void	 kitty_read_limits(void);
+static int	 kitty_detect_gfx(void);
+static int	 kitty_env_kitty(void);
+static int	 kitty_env_iterm(void);
+static int	 kitty_env_sixel(void);
+static int	 kitty_wait_input(int);
+static int	 kitty_query_read(const char *, char *, int, int);
+static int	 kitty_query_kitty(void);
+static int	 kitty_query_sixel(void);
+static int	 kitty_query_cell_csi(int *, int *);
+static void	 kitty_cell_pixels(int *, int *);
+static void	 kitty_fit(int, int, int, int, int *, int *, int *, int *);
+static KITTY_THUMB_S *kitty_thumb_make(const char *, const unsigned char *, size_t);
+static KITTY_THUMB_S *kitty_cache_find(const char *);
+static void	 kitty_cache_add(KITTY_THUMB_S *);
+static void	 kitty_cache_evict(void);
+static int	 kitty_thumb_in_use(KITTY_THUMB_S *);
+static void	 kitty_thumb_free(KITTY_THUMB_S *);
+static int	 kitty_thumb_png(KITTY_THUMB_S *);
+static int	 kitty_register(KITTY_THUMB_S *);
+static KITTY_IMG_S *kitty_find(unsigned);
+static int	 kitty_extract_part_mem(ATTACH_S *, long, unsigned char **, size_t *);
+static int	 kitty_decode_data_uri(char *, unsigned char **, size_t *);
+static char	*kitty_key_part(ATTACH_S *, long, int, int);
+static char	*kitty_key_data(char *, int, int);
+static long	 kitty_current_rawno(void);
+static void	 kitty_reset_shown(void);
+static int	 kitty_handle_on_line(char *, int, HANDLE_S *, HANDLE_S **);
+static int	 kitty_line_indent(char *, int);
+static void	 kitty_paint_one(KITTY_IMG_S *, HANDLE_S *, int, int, int, int, int);
+static void	 kitty_transmit(KITTY_IMG_S *);
+static void	 kitty_delete_image(unsigned);
+static void	 kitty_delete_placement(unsigned, int);
+static void	 kitty_write_apc(const char *, const char *, size_t);
+static void	 kitty_emit(const char *, size_t, int);
+static void	 kitty_goto(int, int);
+static char	*kitty_sixel_encode(KITTY_THUMB_S *, int, int);
+static char	*kitty_b64_bin(const unsigned char *, size_t, size_t *);
+static unsigned char *kitty_b64_dec(const char *, size_t, size_t *);
+static void	 kitty_sb_put(KITTY_SBUF *, const char *, size_t);
+static void	 kitty_sb_puts(KITTY_SBUF *, const char *);
+static void	 kitty_sb_putc(KITTY_SBUF *, int);
+static void	 kitty_sixel_run(KITTY_SBUF *, int, int);
+static int	 kitty_in_tmux(void);
 
+
+/*----------------------------------------------------------------------
+   Exported interface
+  ----*/
 
 int
 kitty_img_enabled(void)
 {
-#ifdef	_WINDOWS
-    return(0);
-#else
-    if(F_OFF(F_KITTY_INLINE_IMAGES, ps_global))
+    if(!ps_global || F_OFF(F_KITTY_INLINE_IMAGES, ps_global))
       return(0);
 
     return(kitty_detect_gfx() != GFX_NONE);
-#endif
 }
 
 
@@ -156,6 +265,55 @@ kitty_img_begin_message(void)
 {
     kitty_img_end_message();
     kitty_reset_shown();
+    kitty_read_limits();
+}
+
+
+/*
+ * Forget the images of the message being viewed: free them in the
+ * terminal and drop the per-message list.  Thumbnails stay cached.
+ */
+void
+kitty_img_end_message(void)
+{
+    int i;
+
+    if(k_gfx == GFX_KITTY){
+	for(i = 0; i < k_n; i++)
+	  if(k_imgs[i].transmitted)
+	    kitty_delete_image(k_imgs[i].id);
+
+	if(k_n > 0)
+	  fflush(stdout);
+    }
+
+    if(k_imgs)
+      fs_give((void **) &k_imgs);
+
+    k_imgs = NULL;
+    k_n = 0;
+    k_alloc = 0;
+}
+
+
+/*
+ * Called once at exit: release the terminal's copies and the cache.
+ */
+void
+kitty_img_shutdown(void)
+{
+    KITTY_THUMB_S *t, *next;
+
+    kitty_img_end_message();
+
+    for(t = k_cache; t; t = next){
+	next = t->next;
+	kitty_thumb_free(t);
+    }
+
+    k_cache = NULL;
+    k_cache_n = 0;
+    k_cache_bytes = 0;
 }
 
 
@@ -166,106 +324,76 @@ kitty_img_note_resize(void)
 }
 
 
-void
-kitty_reset_shown(void)
-{
-    ATTACH_S *a;
-
-    if(!(ps_global && ps_global->atmts))
-      return;
-
-    for(a = ps_global->atmts; a->description != NULL; a++){
-	if(a->kitty_shown){
-	    a->kitty_shown = 0;
-	    a->shown = 0;
-	}
-    }
-}
-
-
-void
-kitty_img_end_message(void)
-{
-    int i;
-
-    for(i = 0; i < k_n; i++){
-	if(k_imgs[i].transmitted)
-	  kitty_delete_id(k_imgs[i].id, 1);
-
-	if(k_imgs[i].png_path){
-	    if(k_imgs[i].own_png)
-	      our_unlink(k_imgs[i].png_path);
-
-	    fs_give((void **) &k_imgs[i].png_path);
-	}
-
-	if(k_imgs[i].src_path){
-	    if(k_imgs[i].own_src)
-	      our_unlink(k_imgs[i].src_path);
-
-	    fs_give((void **) &k_imgs[i].src_path);
-	}
-
-	if(k_imgs[i].sixel)
-	  fs_give((void **) &k_imgs[i].sixel);
-    }
-
-    if(k_imgs)
-      fs_give((void **) &k_imgs);
-
-    k_imgs = NULL;
-    k_n = 0;
-    k_alloc = 0;
-    k_next_id = KITTY_ID_BASE;
-}
-
-
 int
 kitty_img_from_part(ATTACH_S *a, long int msgno, int *rowsp, int *colsp)
 {
-    char *src = NULL;
-    int   rows = 0, cols = 0, id;
+    KITTY_THUMB_S *t;
+    unsigned char *data = NULL;
+    size_t	   len = 0;
+    char	  *key;
+    int		   cw, ch, id;
 
     if(!(a && a->body && a->number && rowsp && colsp))
       return(0);
 
-    if(a->body->type != TYPEIMAGE)
+    if(a->body->type != TYPEIMAGE || !kitty_img_enabled())
       return(0);
 
-    if(a->body->size.bytes > KITTY_MAX_BYTES){
-	dprint((5, "kittyimg: skip oversized part %s (%lu)\n",
-		   a->number ? a->number : "?",
-		   (unsigned long) a->body->size.bytes));
+    if(k_max_count > 0 && k_n >= k_max_count)
+      return(0);
+
+    if(a->body->size.bytes > (unsigned long) KITTY_MAX_BYTES){
+	dprint((5, "kittyimg: skip oversized part %s (%lu bytes)\n",
+		   a->number, (unsigned long) a->body->size.bytes));
 	return(0);
     }
 
     if(msgno <= 0)
       msgno = kitty_current_rawno();
 
-    if(msgno <= 0 || !kitty_extract_part(a, msgno, &src) || !src)
+    if(msgno <= 0)
       return(0);
 
-    id = kitty_prep_from_file(src, 1, &rows, &cols);
+    kitty_cell_pixels(&cw, &ch);
+    key = kitty_key_part(a, msgno, cw, ch);
+    if(!key)
+      return(0);
+
+    t = kitty_cache_find(key);
+    if(!t){
+	if(!kitty_extract_part_mem(a, msgno, &data, &len)){
+	    fs_give((void **) &key);
+	    return(0);
+	}
+
+	t = kitty_thumb_make(key, data, len);
+	fs_give((void **) &data);
+    }
+
+    fs_give((void **) &key);
+    if(!t)
+      return(0);
+
+    id = kitty_register(t);
     if(id <= 0)
       return(0);
 
-    *rowsp = rows;
-    *colsp = cols;
+    *rowsp = t->rows;
+    *colsp = t->cols;
     a->kitty_shown = 1;
     return(id);
 }
 
 
-int
-kitty_img_from_cid(char *cid, int *rowsp, int *colsp)
+ATTACH_S *
+kitty_img_attach_for_cid(char *cid)
 {
     ATTACH_S *a;
     char      wrapped[MAILTMPLEN];
     int	      i;
-    long      msgno;
 
-    if(!(cid && *cid && rowsp && colsp && ps_global && ps_global->atmts))
-      return(0);
+    if(!(cid && *cid && ps_global && ps_global->atmts))
+      return(NULL);
 
     if(cid[0] != '<'){
 	snprintf(wrapped, sizeof(wrapped), "<%s>", cid);
@@ -273,51 +401,125 @@ kitty_img_from_cid(char *cid, int *rowsp, int *colsp)
 	cid = wrapped;
     }
 
-    for(i = 0, a = NULL; ps_global->atmts[i].description != NULL; i++)
-      if(ps_global->atmts[i].body
-	 && ps_global->atmts[i].body->type == TYPEIMAGE
-	 && ps_global->atmts[i].body->id
-	 && !strcmp(ps_global->atmts[i].body->id, cid)){
-	  a = &ps_global->atmts[i];
-	  break;
-      }
+    for(i = 0; ps_global->atmts[i].description != NULL; i++){
+	a = &ps_global->atmts[i];
+	if(a->body && a->body->type == TYPEIMAGE
+	   && a->body->id && !strcmp(a->body->id, cid))
+	  return(a);
+    }
 
+    return(NULL);
+}
+
+
+int
+kitty_img_from_cid(char *cid, int *rowsp, int *colsp)
+{
+    ATTACH_S *a;
+
+    if(!(cid && *cid && rowsp && colsp))
+      return(0);
+
+    a = kitty_img_attach_for_cid(cid);
     if(!a)
       return(0);
 
-    msgno = kitty_current_rawno();
-    return(kitty_img_from_part(a, msgno, rowsp, colsp));
+    return(kitty_img_from_part(a, kitty_current_rawno(), rowsp, colsp));
 }
 
 
 int
 kitty_img_from_data_uri(char *src, int *rowsp, int *colsp)
 {
-    char *path = NULL;
-    int   rows = 0, cols = 0, id;
+    KITTY_THUMB_S *t;
+    unsigned char *data = NULL;
+    size_t	   len = 0;
+    char	  *key;
+    int		   cw, ch, id;
 
-    if(!(src && rowsp && colsp))
+    if(!(src && rowsp && colsp) || !kitty_img_enabled())
       return(0);
 
-    if(!kitty_decode_data_uri(src, &path) || !path)
+    if(k_max_count > 0 && k_n >= k_max_count)
       return(0);
 
-    id = kitty_prep_from_file(path, 1, &rows, &cols);
+    if(strlen(src) > (size_t) KITTY_MAX_BYTES * 4 / 3 + 64)
+      return(0);
+
+    kitty_cell_pixels(&cw, &ch);
+    key = kitty_key_data(src, cw, ch);
+    if(!key)
+      return(0);
+
+    t = kitty_cache_find(key);
+    if(!t){
+	if(!kitty_decode_data_uri(src, &data, &len)){
+	    fs_give((void **) &key);
+	    return(0);
+	}
+
+	t = kitty_thumb_make(key, data, len);
+	fs_give((void **) &data);
+    }
+
+    fs_give((void **) &key);
+    if(!t)
+      return(0);
+
+    id = kitty_register(t);
     if(id <= 0)
       return(0);
 
-    *rowsp = rows;
-    *colsp = cols;
+    *rowsp = t->rows;
+    *colsp = t->cols;
     return(id);
 }
 
 
+/*
+ * Build the "[Image: ...]" text for a handle line, truncated on a
+ * UTF-8 character boundary.
+ */
+char *
+kitty_img_alt(char *alt, char *dst, size_t dstlen)
+{
+    size_t n, i;
+
+    if(!dst || dstlen < 12)
+      return(dst);
+
+    if(!alt || !*alt)
+      alt = "image";
+
+    n = strlen(alt);
+    if(n > KITTY_ALT_MAX){
+	n = KITTY_ALT_MAX;
+	while(n > 0 && (((unsigned char) alt[n]) & 0xC0) == 0x80)
+	  n--;
+    }
+
+    if(n + 10 >= dstlen)
+      n = dstlen - 11;
+
+    strncpy(dst, "[Image: ", dstlen);
+    i = strlen(dst);
+    memcpy(dst + i, alt, n);
+    dst[i + n] = ']';
+    dst[i + n + 1] = '\0';
+    return(dst);
+}
+
+
+/*
+ * Write the handle line and the reserved blank rows for an image part
+ * into the formatted message text.
+ */
 int
 kitty_img_emit_block(gf_o_t pc, HANDLE_S **handlesp, int kid,
-		     int rows, int cols, char *alt)
+		     int rows, int cols, ATTACH_S *a, char *alt)
 {
     HANDLE_S *h;
-    char      buf[32];
+    char      buf[32], text[128];
     int	      i;
 
     if(!(pc && handlesp && kid > 0 && rows > 0))
@@ -329,136 +531,153 @@ kitty_img_emit_block(gf_o_t pc, HANDLE_S **handlesp, int kid,
 
     h->type	      = IMG;
     h->h.img.alt      = cpystr(alt ? alt : "Image");
+    h->h.img.attach   = a;
     h->h.img.kitty_id = kid;
     h->h.img.rows     = rows;
     h->h.img.cols     = cols > 0 ? cols : 1;
 
     snprintf(buf, sizeof(buf), "%d", h->key);
     buf[sizeof(buf)-1] = '\0';
+    kitty_img_alt(alt, text, sizeof(text));
 
     if(!((*pc)(TAG_EMBED) && (*pc)(TAG_HANDLE)
-	 && (*pc)((int) strlen(buf)) && gf_puts(buf, pc)))
+	 && (*pc)((int) strlen(buf)) && gf_puts(buf, pc)
+	 && gf_puts(text, pc)
+	 && (*pc)(TAG_EMBED) && (*pc)(TAG_HANDLEOFF)
+	 && gf_puts(NEWLINE, pc)))
       return(0);
 
     for(i = 0; i < rows; i++)
       if(!gf_puts(NEWLINE, pc))
 	return(0);
 
-    if(!((*pc)(TAG_EMBED) && (*pc)(TAG_HANDLEOFF)))
-      return(0);
-
     return(1);
 }
 
 
+/*
+ * Place every thumbnail whose reserved rows intersect the window.
+ *
+ *   lines/lens  the formatted text, indexed from 0
+ *   offset      index of the line shown on the window's first row
+ *   start_row   screen row of the window's first line
+ *   nlines      rows in the window
+ *   num_lines   valid entries in lines (0 if unknown)
+ *   handles     the message's handle list
+ */
 void
 kitty_img_paint_lines(char **lines, short *lens, long int offset,
-		      int start_row, int nlines, HANDLE_S *handles)
+		      int start_row, int nlines, long int num_lines,
+		      HANDLE_S *handles)
 {
-    int i, skip = 0;
+    HANDLE_S *h;
+    int	      i, gfx, lookback = 0, scols;
 
-    if(!kitty_img_enabled() || k_n <= 0 || !lines || nlines <= 0)
+    if(!kitty_img_enabled() || k_n <= 0 || !lines || nlines <= 0 || !handles)
       return;
 
-    kitty_hide_placements();
+    gfx = kitty_detect_gfx();
+    for(h = handles; h; h = h->next)
+      if((h->type == IMG || h->type == imgData) && h->h.img.kitty_id > 0){
+	  h->h.img.seen = 0;
+	  if(h->h.img.rows > lookback)
+	    lookback = h->h.img.rows;
+      }
 
-    for(i = 0; i < nlines; i++){
-	HANDLE_S *h = NULL;
-	char	 *line;
-	int	  len;
+    scols = (ps_global && ps_global->ttyo) ? ps_global->ttyo->screen_cols : 80;
 
-	if(skip > 0){
-	    skip--;
-	    continue;
-	}
+    for(i = -lookback; i < nlines; i++){
+	KITTY_IMG_S *im;
+	char	    *line;
+	long	     l = offset + i;
+	int	     len, top, cut, first, vis, col;
 
-	if((offset + i) < 0)
+	if(l < 0 || (num_lines > 0 && l >= num_lines))
 	  continue;
 
-	line = lines[offset + i];
-	len  = lens ? lens[offset + i] : (line ? (int) strlen(line) : 0);
+	line = lines[l];
+	len  = lens ? lens[l] : (line ? (int) strlen(line) : 0);
 	if(!line || len <= 0)
 	  continue;
 
-	if(kitty_handle_on_line(line, len, handles, &h)
-	   && h && h->h.img.kitty_id > 0){
-	    KITTY_IMG_S *im = kitty_find((unsigned) h->h.img.kitty_id);
+	if(!kitty_handle_on_line(line, len, handles, &h) || !h)
+	  continue;
 
-	    if(im){
-		if(!im->transmitted)
-		  kitty_transmit(im);
+	im = kitty_find((unsigned) h->h.img.kitty_id);
+	if(!im || !im->thumb)
+	  continue;
 
-		if(im->transmitted)
-		  kitty_place(start_row + i, 0, im);
+	top   = i + 1;				/* first reserved row */
+	cut   = (top < 0) ? -top : 0;		/* rows above the window */
+	first = (top < 0) ? 0 : top;
+	vis   = h->h.img.rows - cut;
+	if(vis > nlines - first)
+	  vis = nlines - first;
 
-		if(h->h.img.rows > 1)
-		  skip = h->h.img.rows - 1;
-	    }
-	}
+	if(cut >= h->h.img.rows || vis <= 0)
+	  continue;
+
+	col = kitty_line_indent(line, len);
+	if(col + im->cols > scols)
+	  col = (scols > im->cols) ? scols - im->cols : 0;
+
+	kitty_paint_one(im, h, start_row + first, col, cut, vis, gfx);
+	h->h.img.seen = 1;
     }
+
+    if(gfx == GFX_KITTY)
+      for(h = handles; h; h = h->next)
+	if((h->type == IMG || h->type == imgData)
+	   && h->h.img.kitty_id > 0 && h->h.img.placed && !h->h.img.seen){
+	    kitty_delete_placement((unsigned) h->h.img.kitty_id, h->key);
+	    h->h.img.placed = 0;
+	}
 
     fflush(stdout);
 }
 
 
-void
-kitty_img_paint_text(char *text, int start_row, int nlines, HANDLE_S *handles)
-{
-    char *p, *line;
-    int   i, skip = 0, len;
+/*----------------------------------------------------------------------
+   Configuration and terminal detection
+  ----*/
 
-    if(!kitty_img_enabled() || k_n <= 0 || !text || nlines <= 0)
+static void
+kitty_read_limits(void)
+{
+    char *s;
+    int	  c = 0, r = 0, n;
+
+    k_max_cols = KITTY_DEF_COLS;
+    k_max_rows = KITTY_DEF_ROWS;
+    k_max_count = KITTY_DEF_COUNT;
+
+    if(!ps_global)
       return;
 
-    kitty_hide_placements();
-
-    p = text;
-    for(i = 0; i < nlines && *p; i++){
-	HANDLE_S *h = NULL;
-
-	line = p;
-	for(; *p && *p != '\n' && *p != '\r'; p++)
-	  ;
-
-	len = p - line;
-
-	if(*p == '\r' && *(p+1) == '\n')
-	  p += 2;
-	else if(*p == '\n' || *p == '\r')
-	  p++;
-
-	if(skip > 0){
-	    skip--;
-	    continue;
-	}
-
-	if(kitty_handle_on_line(line, len, handles, &h)
-	   && h && h->h.img.kitty_id > 0){
-	    KITTY_IMG_S *im = kitty_find((unsigned) h->h.img.kitty_id);
-
-	    if(im){
-		if(!im->transmitted)
-		  kitty_transmit(im);
-
-		if(im->transmitted)
-		  kitty_place(start_row + i, 0, im);
-
-		if(h->h.img.rows > 1)
-		  skip = h->h.img.rows - 1;
-	    }
-	}
+    s = ps_global->VAR_INLINE_IMAGE_SIZE;
+    if(s && sscanf(s, "%dx%d", &c, &r) == 2
+       && c >= 4 && c <= 400 && r >= 1 && r <= 100){
+	k_max_cols = c;
+	k_max_rows = r;
     }
 
-    fflush(stdout);
+    s = ps_global->VAR_INLINE_IMAGE_COUNT;
+    if(s && *s){
+	n = atoi(s);
+	if(n >= 0 && n <= 500)
+	  k_max_count = n;
+    }
 }
 
 
-/*
- * Internal helpers
- */
+static int
+kitty_in_tmux(void)
+{
+    return(getenv("TMUX") != NULL);
+}
 
 
-int
+static int
 kitty_env_kitty(void)
 {
     char *s;
@@ -485,7 +704,22 @@ kitty_env_kitty(void)
 }
 
 
-int
+static int
+kitty_env_iterm(void)
+{
+    char *s;
+
+    if((s = getenv("TERM_PROGRAM")) != NULL && !strucmp(s, "iTerm.app"))
+      return(1);
+
+    if((s = getenv("LC_TERMINAL")) != NULL && !strucmp(s, "iTerm2"))
+      return(1);
+
+    return(0);
+}
+
+
+static int
 kitty_env_sixel(void)
 {
     char *s;
@@ -497,25 +731,39 @@ kitty_env_sixel(void)
 	   || strstr(s, "mintty") != NULL))
       return(1);
 
-    if((s = getenv("TERM_PROGRAM")) != NULL
-       && !strucmp(s, "iTerm.app"))
-      return(1);
-
-    if((s = getenv("LC_TERMINAL")) != NULL
-       && !strucmp(s, "iTerm2"))
-      return(1);
-
     return(0);
 }
 
 
-#ifndef	_WINDOWS
-int
-kitty_query_read(const char *query, char *buf, int buflen, int timeout_ms)
+/*
+ * Wait for input on the tty, retrying when a signal (SIGWINCH during
+ * a resize, typically) interrupts the wait.
+ */
+static int
+kitty_wait_input(int ms)
 {
     struct timeval tv;
     fd_set	   fds;
-    int		   n, got = 0, oldfl;
+    int		   r, tries = 0;
+
+    for(;;){
+	tv.tv_sec  = ms / 1000;
+	tv.tv_usec = (ms % 1000) * 1000;
+	FD_ZERO(&fds);
+	FD_SET(STDIN_FILENO, &fds);
+	r = select(STDIN_FILENO + 1, &fds, NULL, NULL, &tv);
+	if(r < 0 && errno == EINTR && ++tries < 8)
+	  continue;
+
+	return(r > 0);
+    }
+}
+
+
+static int
+kitty_query_read(const char *query, char *buf, int buflen, int timeout_ms)
+{
+    int n, got = 0, oldfl;
 
     if(!query || !buf || buflen < 8)
       return(0);
@@ -526,11 +774,7 @@ kitty_query_read(const char *query, char *buf, int buflen, int timeout_ms)
     fputs(query, stdout);
     fflush(stdout);
 
-    tv.tv_sec  = timeout_ms / 1000;
-    tv.tv_usec = (timeout_ms % 1000) * 1000;
-    FD_ZERO(&fds);
-    FD_SET(STDIN_FILENO, &fds);
-    if(select(STDIN_FILENO + 1, &fds, NULL, NULL, &tv) <= 0)
+    if(!kitty_wait_input(timeout_ms))
       return(0);
 
     oldfl = fcntl(STDIN_FILENO, F_GETFL, 0);
@@ -541,13 +785,11 @@ kitty_query_read(const char *query, char *buf, int buflen, int timeout_ms)
 	n = (int) read(STDIN_FILENO, buf + got, (size_t) (buflen - 1 - got));
 	if(n > 0){
 	    got += n;
-	    tv.tv_sec = 0;
-	    tv.tv_usec = 40000;
-	    FD_ZERO(&fds);
-	    FD_SET(STDIN_FILENO, &fds);
-	    if(select(STDIN_FILENO + 1, &fds, NULL, NULL, &tv) <= 0)
+	    if(!kitty_wait_input(40))
 	      break;
 	}
+	else if(n < 0 && errno == EINTR)
+	  continue;
 	else
 	  break;
     }
@@ -560,34 +802,33 @@ kitty_query_read(const char *query, char *buf, int buflen, int timeout_ms)
 }
 
 
-int
+static int
 kitty_query_kitty(void)
 {
     char buf[256];
-    int  n, tmux;
+    int  n;
 
-    tmux = (getenv("TMUX") != NULL);
-    if(tmux)
+    if(kitty_in_tmux())
       n = kitty_query_read("\033Ptmux;\033\033_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\033\033\\\033\\",
-			   buf, sizeof(buf), 150);
+			   buf, sizeof(buf), 400);
     else
       n = kitty_query_read("\033_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\033\\",
-			   buf, sizeof(buf), 150);
+			   buf, sizeof(buf), 400);
 
     if(n <= 0)
       return(0);
 
-    return(strstr(buf, "OK") != NULL || strstr(buf, "_Gi=") != NULL);
+    return(strstr(buf, "_Gi=31") != NULL);
 }
 
 
-int
+static int
 kitty_query_sixel(void)
 {
     char *p, buf[256];
     int   n;
 
-    n = kitty_query_read("\033[c", buf, sizeof(buf), 150);
+    n = kitty_query_read("\033[c", buf, sizeof(buf), 400);
     if(n <= 0)
       return(0);
 
@@ -604,40 +845,27 @@ kitty_query_sixel(void)
 }
 
 
-int
+static int
 kitty_query_cell_csi(int *cwp, int *chp)
 {
     char buf[128], *p;
     int  n, w = 0, h = 0;
 
-    n = kitty_query_read("\033[16t", buf, sizeof(buf), 80);
+    n = kitty_query_read("\033[16t", buf, sizeof(buf), 250);
     if(n <= 0)
       return(0);
 
-    p = strstr(buf, "\033[6;");
-    if(!p)
-      p = strstr(buf, "[6;");
-
-    if(!p)
-      return(0);
-
-    if(p[0] == '\033')
-      p++;
-
-    if(sscanf(p, "[6;%d;%dt", &h, &w) != 2)
-      return(0);
-
-    if(w <= 0 || h <= 0)
+    p = strstr(buf, "[6;");
+    if(!p || sscanf(p, "[6;%d;%dt", &h, &w) != 2 || w <= 0 || h <= 0)
       return(0);
 
     *cwp = w;
     *chp = h;
     return(1);
 }
-#endif /* !_WINDOWS */
 
 
-int
+static int
 kitty_detect_gfx(void)
 {
     if(k_gfx != GFX_UNKNOWN)
@@ -647,905 +875,320 @@ kitty_detect_gfx(void)
 
     if(kitty_env_kitty())
       k_gfx = GFX_KITTY;
+    else if(kitty_env_iterm())
+      k_gfx = GFX_ITERM;
     else if(kitty_env_sixel())
       k_gfx = GFX_SIXEL;
-#ifndef	_WINDOWS
     else if(kitty_query_kitty())
       k_gfx = GFX_KITTY;
     else if(kitty_query_sixel())
       k_gfx = GFX_SIXEL;
-#endif
 
+    dprint((5, "kittyimg: graphics mode %d\n", k_gfx));
     return(k_gfx);
 }
 
 
-int
+static void
 kitty_cell_pixels(int *cwp, int *chp)
 {
-    if(k_cell_valid){
-	*cwp = k_cell_w;
-	*chp = k_cell_h;
-	return(k_cell_w > 0 && k_cell_h > 0);
-    }
-
-    k_cell_w = 8;
-    k_cell_h = 16;
+    if(!k_cell_valid){
+	int w = 0, h = 0;
 
 #ifdef	TIOCGWINSZ
-    {
-	struct winsize ws;
+	{
+	    struct winsize ws;
 
-	if(ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0
-	   && ws.ws_col > 0 && ws.ws_row > 0
-	   && ws.ws_xpixel > 0 && ws.ws_ypixel > 0){
-	    k_cell_w = ws.ws_xpixel / ws.ws_col;
-	    k_cell_h = ws.ws_ypixel / ws.ws_row;
+	    if(ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0
+	       && ws.ws_col > 0 && ws.ws_row > 0
+	       && ws.ws_xpixel > 0 && ws.ws_ypixel > 0){
+		w = ws.ws_xpixel / ws.ws_col;
+		h = ws.ws_ypixel / ws.ws_row;
+	    }
 	}
+#endif
+
+	if(w <= 0 || h <= 0)
+	  (void) kitty_query_cell_csi(&w, &h);
+
+	k_cell_w = (w > 0) ? w : 8;
+	k_cell_h = (h > 0) ? h : 16;
+	k_cell_valid = 1;
     }
-#endif
 
-#ifndef	_WINDOWS
-    if(k_cell_w <= 0 || k_cell_h <= 0)
-      (void) kitty_query_cell_csi(&k_cell_w, &k_cell_h);
-#endif
-
-    if(k_cell_w <= 0)
-      k_cell_w = 8;
-
-    if(k_cell_h <= 0)
-      k_cell_h = 16;
-
-    k_cell_valid = 1;
     *cwp = k_cell_w;
     *chp = k_cell_h;
-    return(1);
 }
 
 
-void
-kitty_fit_preview(int img_w, int img_h, int *colsp, int *rowsp,
-		  int *px_wp, int *px_hp)
+/*
+ * Fit an image into the configured cell box without ever enlarging it.
+ */
+static void
+kitty_fit(int w, int h, int cw, int ch, int *twp, int *thp, int *colsp, int *rowsp)
 {
-    int    cw, ch, cols, rows;
-    double nat_c, nat_r, sc, sr, s;
+    double s, sw, sh;
+    int	   tw, th, cols, rows;
+
+    sw = (double) (k_max_cols * cw) / (double) w;
+    sh = (double) (k_max_rows * ch) / (double) h;
+    s  = (sw < sh) ? sw : sh;
+    if(s > 1.0)
+      s = 1.0;
+
+    tw = (int) ((double) w * s + 0.5);
+    th = (int) ((double) h * s + 0.5);
+    if(tw < 1)
+      tw = 1;
+
+    if(th < 1)
+      th = 1;
+
+    cols = (tw + cw - 1) / cw;
+    rows = (th + ch - 1) / ch;
+    if(cols > k_max_cols)
+      cols = k_max_cols;
+
+    if(rows > k_max_rows)
+      rows = k_max_rows;
+
+    if(tw > cols * cw)
+      tw = cols * cw;
+
+    if(th > rows * ch)
+      th = rows * ch;
+
+    *twp = tw;
+    *thp = th;
+    *colsp = cols;
+    *rowsp = rows;
+}
+
+
+/*----------------------------------------------------------------------
+   Thumbnails and their cache
+  ----*/
+
+static KITTY_THUMB_S *
+kitty_thumb_make(const char *key, const unsigned char *data, size_t len)
+{
+    KITTY_THUMB_S *t;
+    unsigned char *pix, *small = NULL, *canvas;
+    int		   w = 0, h = 0, comp = 0, cw, ch, tw, th, cols, rows, y;
+
+    if(!key || !data || len == 0 || len > (size_t) KITTY_MAX_BYTES)
+      return(NULL);
+
+    if(!stbi_info_from_memory(data, (int) len, &w, &h, &comp))
+      return(NULL);
+
+    if(w < KITTY_MIN_PIXELS || h < KITTY_MIN_PIXELS
+       || (long) w * (long) h > KITTY_MAX_PIXELS){
+	dprint((5, "kittyimg: rejecting %dx%d image\n", w, h));
+	return(NULL);
+    }
+
+    pix = stbi_load_from_memory(data, (int) len, &w, &h, &comp, 4);
+    if(!pix)
+      return(NULL);
 
     kitty_cell_pixels(&cw, &ch);
-    if(cw < 1)
-      cw = 8;
+    kitty_fit(w, h, cw, ch, &tw, &th, &cols, &rows);
 
-    if(ch < 1)
-      ch = 16;
+    if(tw != w || th != h){
+	small = (unsigned char *) malloc((size_t) tw * (size_t) th * 4);
+	if(!small
+	   || !stbir_resize_uint8_srgb(pix, w, h, 0, small, tw, th, 0, STBIR_RGBA)){
+	    if(small)
+	      free(small);
 
-    /*
-     * Preview size is a cell box, not a pixel budget.  Fit the
-     * image into KITTY_MAX_COLS x KITTY_MAX_ROWS cells, keeping
-     * aspect.  Cell pixels are used only to turn that box into a
-     * raster for sixel/PNG.
-     */
-    if(img_w <= 0 || img_h <= 0){
-	cols = KITTY_MAX_COLS;
-	rows = MIN(KITTY_MAX_ROWS, 6);
-    }
-    else{
-	nat_c = (double) img_w / (double) cw;
-	nat_r = (double) img_h / (double) ch;
-	if(nat_c < 1.0)
-	  nat_c = 1.0;
+	    stbi_image_free(pix);
+	    return(NULL);
+	}
 
-	if(nat_r < 1.0)
-	  nat_r = 1.0;
-
-	sc = (double) KITTY_MAX_COLS / nat_c;
-	sr = (double) KITTY_MAX_ROWS / nat_r;
-	s  = (sc < sr) ? sc : sr;
-
-	cols = MAX(KITTY_MIN_COLS, (int) (nat_c * s + 0.5));
-	rows = MAX(KITTY_MIN_ROWS, (int) (nat_r * s + 0.5));
-	if(cols > KITTY_MAX_COLS)
-	  cols = KITTY_MAX_COLS;
-
-	if(rows > KITTY_MAX_ROWS)
-	  rows = KITTY_MAX_ROWS;
+	stbi_image_free(pix);
+	pix = small;
     }
 
-    *colsp = cols;
-    *rowsp = rows;
-    *px_wp = cols * cw;
-    *px_hp = rows * ch;
+    t = (KITTY_THUMB_S *) fs_get(sizeof(KITTY_THUMB_S));
+    memset(t, 0, sizeof(KITTY_THUMB_S));
+    t->key  = cpystr(key);
+    t->w    = cols * cw;
+    t->h    = rows * ch;
+    t->iw   = tw;
+    t->ih   = th;
+    t->rows = rows;
+    t->cols = cols;
+    canvas  = (unsigned char *) fs_get((size_t) t->w * (size_t) t->h * 4);
+    memset(canvas, 0, (size_t) t->w * (size_t) t->h * 4);
+    for(y = 0; y < th; y++)
+      memcpy(canvas + (size_t) y * (size_t) t->w * 4,
+	     pix + (size_t) y * (size_t) tw * 4, (size_t) tw * 4);
+
+    if(small)
+      free(small);
+    else
+      stbi_image_free(pix);
+
+    t->rgba  = canvas;
+    t->bytes = (size_t) t->w * (size_t) t->h * 4 + strlen(key) + sizeof(*t);
+    kitty_cache_add(t);
+    return(t);
 }
 
 
-int
-kitty_prep_from_file(char *src, int own_src, int *rowsp, int *colsp)
+static KITTY_THUMB_S *
+kitty_cache_find(const char *key)
 {
-    char	  *png = NULL, *sixel = NULL;
-    unsigned char *rgb = NULL;
-    int		   iw = 0, ih = 0, rows = 0, cols = 0, pw = 0, ph = 0;
-    int		   rw = 0, rh = 0, own_png = 0, gfx, id;
+    KITTY_THUMB_S *t;
 
-    if(!src)
-      return(0);
+    for(t = k_cache; t; t = t->next)
+      if(!strcmp(t->key, key)){
+	  t->stamp = ++k_stamp;
+	  return(t);
+      }
 
-    gfx = kitty_detect_gfx();
-    (void) kitty_dims_from_file(src, &iw, &ih);
-    kitty_fit_preview(iw, ih, &cols, &rows, &pw, &ph);
-
-    if(gfx == GFX_KITTY){
-	png = kitty_convert_to_png(src, pw, ph);
-	if(png)
-	  own_png = 1;
-	else if(kitty_file_is_png(src)){
-	    png = src;
-	    own_png = own_src;
-	    own_src = 0;
-	}
-    }
-    else if(gfx == GFX_SIXEL){
-	rgb = kitty_convert_to_rgb(src, pw, ph, &rw, &rh);
-	if(rgb && rw > 0 && rh > 0){
-	    sixel = kitty_sixel_encode(rgb, rw, rh);
-	    fs_give((void **) &rgb);
-	}
-    }
-
-    if(!png && !sixel){
-	if(own_src && src){
-	    our_unlink(src);
-	    fs_give((void **) &src);
-	}
-
-	return(0);
-    }
-
-    id = kitty_register(png, src, sixel, own_png, own_src, rows, cols, pw, ph);
-    if(id <= 0){
-	if(own_png && png && png != src){
-	    our_unlink(png);
-	    fs_give((void **) &png);
-	}
-
-	if(sixel)
-	  fs_give((void **) &sixel);
-
-	if(own_src && src){
-	    our_unlink(src);
-	    fs_give((void **) &src);
-	}
-
-	return(0);
-    }
-
-    *rowsp = rows;
-    *colsp = cols;
-    return(id);
+    return(NULL);
 }
 
 
-int
-kitty_read_u16be(unsigned char *p)
+static void
+kitty_cache_add(KITTY_THUMB_S *t)
 {
-    return((p[0] << 8) | p[1]);
+    t->stamp = ++k_stamp;
+    t->next  = k_cache;
+    k_cache  = t;
+    k_cache_n++;
+    k_cache_bytes += t->bytes;
+    kitty_cache_evict();
 }
 
 
-unsigned long
-kitty_read_u32be(unsigned char *p)
+static int
+kitty_thumb_in_use(KITTY_THUMB_S *t)
 {
-    return(((unsigned long) p[0] << 24)
-	   | ((unsigned long) p[1] << 16)
-	   | ((unsigned long) p[2] << 8)
-	   | (unsigned long) p[3]);
-}
+    int i;
 
-
-unsigned long
-kitty_read_u32le(unsigned char *p)
-{
-    return((unsigned long) p[0]
-	   | ((unsigned long) p[1] << 8)
-	   | ((unsigned long) p[2] << 16)
-	   | ((unsigned long) p[3] << 24));
-}
-
-
-int
-kitty_read_u16le(unsigned char *p)
-{
-    return(p[0] | (p[1] << 8));
-}
-
-
-int
-kitty_dims_from_mem(unsigned char *b, long int n, int *wp, int *hp)
-{
-    *wp = *hp = 0;
-    if(!b || n < 10)
-      return(0);
-
-    /* PNG */
-    if(n >= 24
-       && b[0] == 0x89 && b[1] == 'P' && b[2] == 'N' && b[3] == 'G'
-       && b[4] == 0x0d && b[5] == 0x0a && b[6] == 0x1a && b[7] == 0x0a
-       && b[12] == 'I' && b[13] == 'H' && b[14] == 'D' && b[15] == 'R'){
-	*wp = (int) kitty_read_u32be(b + 16);
-	*hp = (int) kitty_read_u32be(b + 20);
-	return(*wp > 0 && *hp > 0);
-    }
-
-    /* GIF */
-    if(n >= 10
-       && b[0] == 'G' && b[1] == 'I' && b[2] == 'F'
-       && b[3] == '8' && (b[4] == '7' || b[4] == '9') && b[5] == 'a'){
-	*wp = kitty_read_u16le(b + 6);
-	*hp = kitty_read_u16le(b + 8);
-	return(*wp > 0 && *hp > 0);
-    }
-
-    /* BMP */
-    if(n >= 26 && b[0] == 'B' && b[1] == 'M'){
-	long w, h;
-
-	w = (long) kitty_read_u32le(b + 18);
-	h = (long) kitty_read_u32le(b + 22);
-	if(h < 0)
-	  h = -h;
-
-	*wp = (int) w;
-	*hp = (int) h;
-	return(*wp > 0 && *hp > 0);
-    }
-
-    /* JPEG: walk markers for SOF0/SOF1/SOF2 */
-    if(n > 4 && b[0] == 0xff && b[1] == 0xd8){
-	long i = 2;
-
-	while(i + 9 < n){
-	    int marker, seglen;
-
-	    if(b[i] != 0xff)
-	      break;
-
-	    while(i < n && b[i] == 0xff)
-	      i++;
-
-	    if(i >= n)
-	      break;
-
-	    marker = b[i++];
-	    if(marker == 0xd8 || marker == 0xd9 || marker == 0x01)
-	      continue;
-
-	    if(i + 1 >= n)
-	      break;
-
-	    seglen = kitty_read_u16be(b + i);
-	    if(seglen < 2 || i + seglen > n)
-	      break;
-
-	    if((marker >= 0xc0 && marker <= 0xc3)
-	       || (marker >= 0xc5 && marker <= 0xc7)
-	       || (marker >= 0xc9 && marker <= 0xcb)
-	       || (marker >= 0xcd && marker <= 0xcf)){
-		*hp = kitty_read_u16be(b + i + 3);
-		*wp = kitty_read_u16be(b + i + 5);
-		return(*wp > 0 && *hp > 0);
-	    }
-
-	    i += seglen;
-	}
-    }
-
-    /* WebP */
-    if(n >= 30
-       && b[0] == 'R' && b[1] == 'I' && b[2] == 'F' && b[3] == 'F'
-       && b[8] == 'W' && b[9] == 'E' && b[10] == 'B' && b[11] == 'P'){
-	if(b[12] == 'V' && b[13] == 'P' && b[14] == '8' && b[15] == ' '){
-	    *wp = kitty_read_u16le(b + 26) & 0x3fff;
-	    *hp = kitty_read_u16le(b + 28) & 0x3fff;
-	    return(*wp > 0 && *hp > 0);
-	}
-
-	if(b[12] == 'V' && b[13] == 'P' && b[14] == '8' && b[15] == 'L'
-	   && n >= 25){
-	    unsigned long bits = kitty_read_u32le(b + 21);
-
-	    *wp = (int) ((bits & 0x3fff) + 1);
-	    *hp = (int) (((bits >> 14) & 0x3fff) + 1);
-	    return(*wp > 0 && *hp > 0);
-	}
-
-	if(b[12] == 'V' && b[13] == 'P' && b[14] == '8' && b[15] == 'X'
-	   && n >= 30){
-	    *wp = 1 + (b[24] | (b[25] << 8) | (b[26] << 16));
-	    *hp = 1 + (b[27] | (b[28] << 8) | (b[29] << 16));
-	    return(*wp > 0 && *hp > 0);
-	}
-    }
+    for(i = 0; i < k_n; i++)
+      if(k_imgs[i].thumb == t)
+	return(1);
 
     return(0);
 }
 
 
-int
-kitty_dims_from_file(char *path, int *wp, int *hp)
+static void
+kitty_cache_evict(void)
 {
-    FILE	  *fp;
-    unsigned char  buf[4096];
-    long	   n;
+    while(k_cache_n > KITTY_CACHE_MAX_ENTRIES
+	  || k_cache_bytes > (size_t) KITTY_CACHE_MAX_BYTES){
+	KITTY_THUMB_S *t, **pp, **oldest = NULL;
 
-    *wp = *hp = 0;
-    if(!path)
-      return(0);
+	for(pp = &k_cache; (t = *pp) != NULL; pp = &t->next)
+	  if(!kitty_thumb_in_use(t) && (!oldest || t->stamp < (*oldest)->stamp))
+	    oldest = pp;
 
-    if((fp = our_fopen(path, "rb")) == NULL)
-      return(0);
+	if(!oldest)
+	  break;
 
-    n = (long) fread(buf, 1, sizeof(buf), fp);
-    fclose(fp);
-    if(n <= 0)
-      return(0);
-
-    return(kitty_dims_from_mem(buf, n, wp, hp));
-}
-
-
-int
-kitty_file_is_png(char *path)
-{
-    FILE	  *fp;
-    unsigned char  sig[8];
-
-    if(!path || (fp = our_fopen(path, "rb")) == NULL)
-      return(0);
-
-    if(fread(sig, 1, 8, fp) != 8){
-	fclose(fp);
-	return(0);
+	t = *oldest;
+	*oldest = t->next;
+	kitty_thumb_free(t);
+	k_cache_n--;
     }
-
-    fclose(fp);
-    return(sig[0] == 0x89 && sig[1] == 'P' && sig[2] == 'N' && sig[3] == 'G'
-	   && sig[4] == 0x0d && sig[5] == 0x0a && sig[6] == 0x1a && sig[7] == 0x0a);
 }
 
 
-#ifndef	_WINDOWS
-int
-kitty_run_cmd(char **argv)
+static void
+kitty_thumb_free(KITTY_THUMB_S *t)
 {
-    pid_t pid;
-    int   status, fd;
+    if(!t)
+      return;
 
-    if(!argv || !argv[0])
-      return(-1);
+    if(k_cache_bytes >= t->bytes)
+      k_cache_bytes -= t->bytes;
+    else
+      k_cache_bytes = 0;
 
-    pid = fork();
-    if(pid < 0)
-      return(-1);
+    if(t->key)
+      fs_give((void **) &t->key);
 
-    if(pid == 0){
-	fd = open("/dev/null", O_RDWR);
-	if(fd >= 0){
-	    dup2(fd, STDIN_FILENO);
-	    dup2(fd, STDOUT_FILENO);
-	    dup2(fd, STDERR_FILENO);
-	    if(fd > 2)
-	      close(fd);
-	}
+    if(t->rgba)
+      fs_give((void **) &t->rgba);
 
-	execvp(argv[0], argv);
-	_exit(127);
-    }
+    if(t->png)
+      free(t->png);
 
-    if(waitpid(pid, &status, 0) < 0)
-      return(-1);
-
-    return((WIFEXITED(status) && WEXITSTATUS(status) == 0) ? 0 : -1);
-}
-#endif
-
-
-char *
-kitty_convert_to_png(char *src, int pw, int ph)
-{
-#ifdef	_WINDOWS
-    (void) src;
-    (void) pw;
-    (void) ph;
-    return(NULL);
-#else
-    char *dst, *argv[12], geom[32], hbuf[16], wbuf[16];
-
-    if(!src)
-      return(NULL);
-
-    if(pw < 1)
-      pw = 256;
-
-    if(ph < 1)
-      ph = 128;
-
-    dst = temp_nam_ext(NULL, "kp", "png");
-    if(!dst)
-      return(NULL);
-
-    snprintf(wbuf, sizeof(wbuf), "%d", pw);
-    snprintf(hbuf, sizeof(hbuf), "%d", ph);
-    snprintf(geom, sizeof(geom), "%dx%d>", pw, ph);
-
-    /*
-     * Write a preview whose pixel size matches the current cell
-     * geometry. sips -z is height then width; magick/convert ">"
-     * only shrinks.
-     */
-    argv[0] = "sips";
-    argv[1] = "-s";
-    argv[2] = "format";
-    argv[3] = "png";
-    argv[4] = "-z";
-    argv[5] = hbuf;
-    argv[6] = wbuf;
-    argv[7] = src;
-    argv[8] = "--out";
-    argv[9] = dst;
-    argv[10] = NULL;
-    if(kitty_run_cmd(argv) == 0 && kitty_file_is_png(dst))
-      return(dst);
-
-    argv[0] = "magick";
-    argv[1] = src;
-    argv[2] = "-resize";
-    argv[3] = geom;
-    argv[4] = dst;
-    argv[5] = NULL;
-    if(kitty_run_cmd(argv) == 0 && kitty_file_is_png(dst))
-      return(dst);
-
-    argv[0] = "convert";
-    argv[1] = src;
-    argv[2] = "-resize";
-    argv[3] = geom;
-    argv[4] = dst;
-    argv[5] = NULL;
-    if(kitty_run_cmd(argv) == 0 && kitty_file_is_png(dst))
-      return(dst);
-
-    our_unlink(dst);
-    fs_give((void **) &dst);
-    return(NULL);
-#endif
+    fs_give((void **) &t);
 }
 
 
 static int
-kitty_ppm_skip(FILE *fp)
+kitty_thumb_png(KITTY_THUMB_S *t)
 {
-    int c;
+    int len = 0;
 
-    for(;;){
-	c = fgetc(fp);
-	if(c == EOF)
-	  return(0);
+    if(!t)
+      return(0);
 
-	if(c == '#'){
-	    while((c = fgetc(fp)) != EOF && c != '\n')
-	      ;
+    if(t->png)
+      return(1);
 
-	    if(c == EOF)
-	      return(0);
-	}
-	else if(!isspace((unsigned char) c)){
-	    ungetc(c, fp);
-	    return(1);
-	}
+    t->png = stbi_write_png_to_mem(t->rgba, t->w * 4, t->w, t->h, 4, &len);
+    if(!t->png || len <= 0){
+	if(t->png)
+	  free(t->png);
+
+	t->png = NULL;
+	return(0);
     }
+
+    t->pnglen = (size_t) len;
+    t->bytes += t->pnglen;
+    k_cache_bytes += t->pnglen;
+    return(1);
 }
 
 
-unsigned char *
-kitty_load_ppm(char *path, int *wp, int *hp)
-{
-    FILE	  *fp;
-    unsigned char *rgb;
-    int		   w = 0, h = 0, maxv = 0, c;
-    size_t	   need, got;
-
-    *wp = *hp = 0;
-    if(!path || (fp = our_fopen(path, "rb")) == NULL)
-      return(NULL);
-
-    if(fgetc(fp) != 'P' || fgetc(fp) != '6'){
-	fclose(fp);
-	return(NULL);
-    }
-
-    if(!kitty_ppm_skip(fp) || fscanf(fp, "%d", &w) != 1
-       || !kitty_ppm_skip(fp) || fscanf(fp, "%d", &h) != 1
-       || !kitty_ppm_skip(fp) || fscanf(fp, "%d", &maxv) != 1
-       || w <= 0 || h <= 0 || maxv != 255){
-	fclose(fp);
-	return(NULL);
-    }
-
-    c = fgetc(fp);
-    if(c == EOF || !isspace((unsigned char) c)){
-	fclose(fp);
-	return(NULL);
-    }
-
-    need = (size_t) w * (size_t) h * 3;
-    rgb = (unsigned char *) fs_get(need);
-    got = fread(rgb, 1, need, fp);
-    fclose(fp);
-    if(got != need){
-	fs_give((void **) &rgb);
-	return(NULL);
-    }
-
-    *wp = w;
-    *hp = h;
-    return(rgb);
-}
-
-
-unsigned char *
-kitty_load_bmp(char *path, int *wp, int *hp)
-{
-    FILE	  *fp;
-    unsigned char  hdr[54], *rgb, *row;
-    unsigned long  off, w_ul;
-    long	   h_l, y;
-    int		   w, h, bits, x, topdown;
-    size_t	   rowb;
-
-    *wp = *hp = 0;
-    if(!path || (fp = our_fopen(path, "rb")) == NULL)
-      return(NULL);
-
-    if(fread(hdr, 1, 54, fp) != 54
-       || hdr[0] != 'B' || hdr[1] != 'M'){
-	fclose(fp);
-	return(NULL);
-    }
-
-    off  = kitty_read_u32le(hdr + 10);
-    w_ul = kitty_read_u32le(hdr + 18);
-    h_l  = (long) kitty_read_u32le(hdr + 22);
-    bits = kitty_read_u16le(hdr + 28);
-    if(kitty_read_u32le(hdr + 30) != 0
-       || (bits != 24 && bits != 32)
-       || w_ul == 0 || w_ul > 8192){
-	fclose(fp);
-	return(NULL);
-    }
-
-    topdown = 0;
-    if(h_l < 0){
-	h_l = -h_l;
-	topdown = 1;
-    }
-
-    if(h_l <= 0 || h_l > 8192){
-	fclose(fp);
-	return(NULL);
-    }
-
-    w = (int) w_ul;
-    h = (int) h_l;
-    rowb = ((size_t) bits * (size_t) w + 31) / 32 * 4;
-
-    if(fseek(fp, (long) off, SEEK_SET) != 0){
-	fclose(fp);
-	return(NULL);
-    }
-
-    rgb = (unsigned char *) fs_get((size_t) w * (size_t) h * 3);
-    row = (unsigned char *) fs_get(rowb);
-    for(y = 0; y < h; y++){
-	unsigned char *dst;
-	int	       srcy;
-
-	if(fread(row, 1, rowb, fp) != rowb){
-	    fs_give((void **) &rgb);
-	    fs_give((void **) &row);
-	    fclose(fp);
-	    return(NULL);
-	}
-
-	srcy = topdown ? (int) y : (h - 1 - (int) y);
-	dst = rgb + (size_t) srcy * (size_t) w * 3;
-	for(x = 0; x < w; x++){
-	    unsigned char *p = row + x * (bits / 8);
-
-	    dst[x * 3 + 0] = p[2];
-	    dst[x * 3 + 1] = p[1];
-	    dst[x * 3 + 2] = p[0];
-	}
-    }
-
-    fs_give((void **) &row);
-    fclose(fp);
-    *wp = w;
-    *hp = h;
-    return(rgb);
-}
-
-
-unsigned char *
-kitty_convert_to_rgb(char *src, int pw, int ph, int *wp, int *hp)
-{
-#ifdef	_WINDOWS
-    (void) src;
-    (void) pw;
-    (void) ph;
-    *wp = *hp = 0;
-    return(NULL);
-#else
-    char	  *dst, *argv[12], geom[32], hbuf[16], wbuf[16];
-    unsigned char *rgb = NULL;
-
-    *wp = *hp = 0;
-    if(!src)
-      return(NULL);
-
-    if(pw < 1)
-      pw = 256;
-
-    if(ph < 1)
-      ph = 128;
-
-    snprintf(wbuf, sizeof(wbuf), "%d", pw);
-    snprintf(hbuf, sizeof(hbuf), "%d", ph);
-    snprintf(geom, sizeof(geom), "%dx%d>", pw, ph);
-
-    dst = temp_nam_ext(NULL, "ks", "ppm");
-    if(dst){
-	argv[0] = "magick";
-	argv[1] = src;
-	argv[2] = "-resize";
-	argv[3] = geom;
-	argv[4] = dst;
-	argv[5] = NULL;
-	if(kitty_run_cmd(argv) == 0)
-	  rgb = kitty_load_ppm(dst, wp, hp);
-
-	if(!rgb){
-	    argv[0] = "convert";
-	    if(kitty_run_cmd(argv) == 0)
-	      rgb = kitty_load_ppm(dst, wp, hp);
-	}
-
-	our_unlink(dst);
-	fs_give((void **) &dst);
-    }
-
-    if(rgb)
-      return(rgb);
-
-    dst = temp_nam_ext(NULL, "ks", "bmp");
-    if(dst){
-	argv[0] = "sips";
-	argv[1] = "-s";
-	argv[2] = "format";
-	argv[3] = "bmp";
-	argv[4] = "-z";
-	argv[5] = hbuf;
-	argv[6] = wbuf;
-	argv[7] = src;
-	argv[8] = "--out";
-	argv[9] = dst;
-	argv[10] = NULL;
-	if(kitty_run_cmd(argv) == 0)
-	  rgb = kitty_load_bmp(dst, wp, hp);
-
-	our_unlink(dst);
-	fs_give((void **) &dst);
-    }
-
-    return(rgb);
-#endif
-}
-
-
-typedef struct kitty_sbuf_s {
-    char   *s;
-    size_t  n;
-    size_t  a;
-} KITTY_SBUF;
-
-
-void
-kitty_sb_put(KITTY_SBUF *b, const char *p, size_t n)
-{
-    if(!b || !p || n == 0)
-      return;
-
-    if(b->n + n + 1 > b->a){
-	b->a = b->a ? b->a : 1024;
-	while(b->n + n + 1 > b->a)
-	  b->a *= 2;
-
-	if(b->s)
-	  fs_resize((void **) &b->s, b->a);
-	else
-	  b->s = (char *) fs_get(b->a);
-    }
-
-    memcpy(b->s + b->n, p, n);
-    b->n += n;
-    b->s[b->n] = '\0';
-}
-
-
-void
-kitty_sb_puts(KITTY_SBUF *b, const char *p)
-{
-    if(p)
-      kitty_sb_put(b, p, strlen(p));
-}
-
-
-void
-kitty_sb_putc(KITTY_SBUF *b, int c)
-{
-    char ch = (char) c;
-
-    kitty_sb_put(b, &ch, 1);
-}
-
-
-void
-kitty_sixel_run(KITTY_SBUF *b, int ch, int n)
-{
-    char tmp[24];
-
-    if(n <= 0 || ch < 0)
-      return;
-
-    if(n >= 3){
-	snprintf(tmp, sizeof(tmp), "!%d%c", n, ch);
-	kitty_sb_puts(b, tmp);
-    }
-    else{
-	while(n-- > 0)
-	  kitty_sb_putc(b, ch);
-    }
-}
-
-
-char *
-kitty_sixel_encode(unsigned char *rgb, int w, int h)
-{
-    KITTY_SBUF	   b;
-    unsigned char *idx;
-    int		   i, x, y, band, dy, color, used[216], band_used[216];
-    char	   tmp[48];
-
-    memset(&b, 0, sizeof(b));
-    if(!rgb || w <= 0 || h <= 0)
-      return(NULL);
-
-    idx = (unsigned char *) fs_get((size_t) w * (size_t) h);
-    memset(used, 0, sizeof(used));
-    for(i = 0; i < w * h; i++){
-	int r = rgb[i * 3 + 0] * 5 / 255;
-	int g = rgb[i * 3 + 1] * 5 / 255;
-	int bl = rgb[i * 3 + 2] * 5 / 255;
-
-	idx[i] = (unsigned char) (r * 36 + g * 6 + bl);
-	used[idx[i]] = 1;
-    }
-
-    kitty_sb_puts(&b, "\033P0;1;0q");
-    snprintf(tmp, sizeof(tmp), "\"1;1;%d;%d", w, h);
-    kitty_sb_puts(&b, tmp);
-
-    for(color = 0; color < 216; color++){
-	if(!used[color])
-	  continue;
-
-	snprintf(tmp, sizeof(tmp), "#%d;2;%d;%d;%d",
-		 color,
-		 (color / 36) * 20,
-		 ((color / 6) % 6) * 20,
-		 (color % 6) * 20);
-	kitty_sb_puts(&b, tmp);
-    }
-
-    for(band = 0; band < (h + 5) / 6; band++){
-	int first = 1;
-
-	memset(band_used, 0, sizeof(band_used));
-	for(dy = 0; dy < 6; dy++){
-	    y = band * 6 + dy;
-	    if(y >= h)
-	      break;
-
-	    for(x = 0; x < w; x++)
-	      band_used[idx[y * w + x]] = 1;
-	}
-
-	for(color = 0; color < 216; color++){
-	    int run = 0, last = -1;
-
-	    if(!band_used[color])
-	      continue;
-
-	    if(!first)
-	      kitty_sb_putc(&b, '$');
-
-	    first = 0;
-	    snprintf(tmp, sizeof(tmp), "#%d", color);
-	    kitty_sb_puts(&b, tmp);
-
-	    for(x = 0; x < w; x++){
-		int six = 0, ch;
-
-		for(dy = 0; dy < 6; dy++){
-		    y = band * 6 + dy;
-		    if(y < h && idx[y * w + x] == color)
-		      six |= 1 << dy;
-		}
-
-		ch = '?' + six;
-		if(ch == last)
-		  run++;
-		else{
-		    kitty_sixel_run(&b, last, run);
-		    last = ch;
-		    run = 1;
-		}
-	    }
-
-	    kitty_sixel_run(&b, last, run);
-	}
-
-	kitty_sb_putc(&b, '-');
-    }
-
-    kitty_sb_puts(&b, "\033\\");
-    fs_give((void **) &idx);
-    return(b.s);
-}
-
-
-int
-kitty_register(char *png, char *src, char *sixel, int own_png, int own_src,
-	       int rows, int cols, int px_w, int px_h)
+/*
+ * Add a thumbnail to the message's image list; the same thumbnail
+ * referenced twice gets the same id.
+ */
+static int
+kitty_register(KITTY_THUMB_S *t)
 {
     KITTY_IMG_S *im;
+    int		 i;
 
-    if((!png && !sixel) || rows <= 0 || cols <= 0)
+    if(!t)
       return(0);
+
+    for(i = 0; i < k_n; i++)
+      if(k_imgs[i].thumb == t)
+	return((int) k_imgs[i].id);
 
     if(k_n >= k_alloc){
 	k_alloc = k_alloc ? k_alloc * 2 : 8;
 	if(k_imgs)
 	  fs_resize((void **) &k_imgs, k_alloc * sizeof(KITTY_IMG_S));
-	else{
-	    k_imgs = (KITTY_IMG_S *) fs_get(k_alloc * sizeof(KITTY_IMG_S));
-	    memset(k_imgs, 0, k_alloc * sizeof(KITTY_IMG_S));
-	}
+	else
+	  k_imgs = (KITTY_IMG_S *) fs_get(k_alloc * sizeof(KITTY_IMG_S));
     }
+
+    if(k_next_id >= KITTY_ID_LIMIT)
+      k_next_id = KITTY_ID_BASE;
 
     im = &k_imgs[k_n++];
     memset(im, 0, sizeof(KITTY_IMG_S));
-    im->id	 = k_next_id++;
-    im->png_path = png;
-    im->src_path = (src && src != png) ? src : NULL;
-    im->sixel	 = sixel;
-    im->rows	 = rows;
-    im->cols	 = cols;
-    im->px_w	 = px_w;
-    im->px_h	 = px_h;
-    im->own_png	 = own_png ? 1 : 0;
-    im->own_src	 = (own_src && im->src_path) ? 1 : 0;
+    im->id    = k_next_id++;
+    im->thumb = t;
+    im->rows  = t->rows;
+    im->cols  = t->cols;
     return((int) im->id);
 }
 
 
-KITTY_IMG_S *
+static KITTY_IMG_S *
 kitty_find(unsigned int id)
 {
     int i;
@@ -1558,186 +1201,180 @@ kitty_find(unsigned int id)
 }
 
 
-void
-kitty_write_raw(const char *s)
+/*----------------------------------------------------------------------
+   Getting the image bytes
+  ----*/
+
+static long
+kitty_current_rawno(void)
 {
-    if(s)
-      fputs(s, stdout);
+    if(!(ps_global && ps_global->msgmap && ps_global->mail_stream))
+      return(0L);
+
+    return(mn_m2raw(ps_global->msgmap, mn_get_cur(ps_global->msgmap)));
 }
 
 
-void
-kitty_write_apc(const char *ctrl, const char *payload)
+static void
+kitty_reset_shown(void)
 {
-#ifdef	_WINDOWS
-    (void) ctrl;
-    (void) payload;
-#else
-    int tmux = (getenv("TMUX") != NULL);
+    ATTACH_S *a;
 
-    if(!ctrl)
+    if(!(ps_global && ps_global->atmts))
       return;
 
-    if(tmux)
-      kitty_write_raw("\033Ptmux;");
-
-    if(tmux)
-      fputc('\033', stdout);
-
-    kitty_write_raw("\033_G");
-    kitty_write_raw(ctrl);
-    if(payload){
-	fputc(';', stdout);
-	kitty_write_raw(payload);
-    }
-
-    if(tmux)
-      fputc('\033', stdout);
-
-    kitty_write_raw("\033\\");
-
-    if(tmux)
-      kitty_write_raw("\033\\");
-#endif
+    for(a = ps_global->atmts; a->description != NULL; a++)
+      if(a->kitty_shown){
+	  a->kitty_shown = 0;
+	  a->shown = 0;
+      }
 }
 
 
-char *
-kitty_b64(const char *src)
+static char *
+kitty_key_part(ATTACH_S *a, long int msgno, int cw, int ch)
 {
-    static const char v[] =
-	"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    unsigned long srcl, n;
-    unsigned char *s, *d, *ret;
+    char	  buf[MAILTMPLEN];
+    unsigned long uid = 0;
+    char	 *mbx = "?";
 
+    if(ps_global && ps_global->mail_stream){
+	uid = mail_uid(ps_global->mail_stream, msgno);
+	if(ps_global->mail_stream->mailbox)
+	  mbx = ps_global->mail_stream->mailbox;
+    }
+
+    snprintf(buf, sizeof(buf), "part|%s|%lu|%ld|%s|%dx%d",
+	     mbx, uid, msgno, a->number, cw, ch);
+    buf[sizeof(buf)-1] = '\0';
+    return(cpystr(buf));
+}
+
+
+static char *
+kitty_key_data(char *src, int cw, int ch)
+{
+    char		 buf[128];
+    unsigned long long	 hash = 1469598103934665603ULL;
+    unsigned char	*p;
+
+    for(p = (unsigned char *) src; *p; p++){
+	hash ^= *p;
+	hash *= 1099511628211ULL;
+    }
+
+    snprintf(buf, sizeof(buf), "data|%016llx|%lu|%dx%d",
+	     hash, (unsigned long) strlen(src), cw, ch);
+    buf[sizeof(buf)-1] = '\0';
+    return(cpystr(buf));
+}
+
+
+static int
+kitty_extract_part_mem(ATTACH_S *a, long int msgno,
+		       unsigned char **bufp, size_t *lenp)
+{
+    STORE_S *so;
+    gf_o_t   pc;
+    char    *err;
+    size_t   len;
+
+    *bufp = NULL;
+    *lenp = 0;
+    if(!(a && a->number && ps_global && ps_global->mail_stream))
+      return(0);
+
+    so = so_get(CharStar, NULL, EDIT_ACCESS);
+    if(!so)
+      return(0);
+
+    gf_set_so_writec(&pc, so);
+    err = detach(ps_global->mail_stream, msgno, a->number, 0L, NULL, pc,
+		 NULL, DT_BINARY);
+    gf_clear_so_writec(so);
+
+    len = so->txt ? (size_t) ((unsigned char *) so->eod - (unsigned char *) so->txt) : 0;
+    if(err || len == 0 || len > (size_t) KITTY_MAX_BYTES){
+	dprint((5, "kittyimg: extract of %s failed: %s\n",
+		   a->number, err ? err : "size"));
+	so_give(&so);
+	return(0);
+    }
+
+    *bufp = (unsigned char *) fs_get(len);
+    memcpy(*bufp, so->txt, len);
+    *lenp = len;
+    so_give(&so);
+    return(1);
+}
+
+
+static int
+kitty_decode_data_uri(char *src, unsigned char **bufp, size_t *lenp)
+{
+    char   *comma, *payload, *b64;
+    size_t  n;
+
+    *bufp = NULL;
+    *lenp = 0;
     if(!src)
-      return(NULL);
+      return(0);
 
-    srcl = strlen(src);
-    n = ((srcl + 2) / 3) * 4;
-    ret = (unsigned char *) fs_get((size_t) n + 1);
-    s = (unsigned char *) src;
-    d = ret;
-    for(; srcl >= 3; s += 3, srcl -= 3){
-	*d++ = v[s[0] >> 2];
-	*d++ = v[((s[0] << 4) + (s[1] >> 4)) & 0x3f];
-	*d++ = v[((s[1] << 2) + (s[2] >> 6)) & 0x3f];
-	*d++ = v[s[2] & 0x3f];
+    if(!struncmp(src, "data:", 5))
+      src += 5;
+
+    comma = strchr(src, ',');
+    if(!comma || !comma[1])
+      return(0);
+
+    payload = comma + 1;
+    n = strlen(payload);
+
+    b64 = srchstr(src, "base64");
+    if(b64 && b64 < comma){
+	*bufp = kitty_b64_dec(payload, n, lenp);
+    }
+    else{
+	/* percent-encoded raw bytes */
+	unsigned char *d;
+	size_t	       i, o = 0;
+
+	d = (unsigned char *) fs_get(n + 1);
+	for(i = 0; i < n; i++){
+	    if(payload[i] == '%' && i + 2 < n
+	       && isxdigit((unsigned char) payload[i+1])
+	       && isxdigit((unsigned char) payload[i+2])){
+		unsigned v = 0;
+
+		sscanf(payload + i + 1, "%2x", &v);
+		d[o++] = (unsigned char) v;
+		i += 2;
+	    }
+	    else
+	      d[o++] = (unsigned char) payload[i];
+	}
+
+	*bufp = d;
+	*lenp = o;
     }
 
-    if(srcl){
-	*d++ = v[s[0] >> 2];
-	*d++ = v[((s[0] << 4) + (--srcl ? (s[1] >> 4) : 0)) & 0x3f];
-	*d++ = srcl ? v[(s[1] << 2) & 0x3f] : '=';
-	*d++ = '=';
+    if(!*bufp || *lenp == 0 || *lenp > (size_t) KITTY_MAX_BYTES){
+	if(*bufp)
+	  fs_give((void **) bufp);
+
+	*lenp = 0;
+	return(0);
     }
 
-    *d = '\0';
-    return((char *) ret);
+    return(1);
 }
 
 
-void
-kitty_transmit(KITTY_IMG_S *im)
-{
-    char *b64;
-    char  ctrl[80];
+/*----------------------------------------------------------------------
+   Finding image handles in formatted lines
+  ----*/
 
-    if(!im || im->transmitted)
-      return;
-
-    if(im->sixel){
-	im->transmitted = 1;
-	return;
-    }
-
-    if(!im->png_path)
-      return;
-
-    b64 = kitty_b64(im->png_path);
-    if(!b64)
-      return;
-
-    snprintf(ctrl, sizeof(ctrl), "a=t,f=100,t=f,i=%u,q=2", im->id);
-    kitty_write_apc(ctrl, b64);
-    fs_give((void **) &b64);
-    im->transmitted = 1;
-}
-
-
-void
-kitty_delete_id(unsigned int id, int free_data)
-{
-    char ctrl[80];
-
-    snprintf(ctrl, sizeof(ctrl), "a=d,d=%c,i=%u,q=2",
-	     free_data ? 'I' : 'i', id);
-    kitty_write_apc(ctrl, NULL);
-}
-
-
-void
-kitty_hide_placements(void)
-{
-    int i;
-
-    for(i = 0; i < k_n; i++)
-      if(k_imgs[i].transmitted && k_imgs[i].png_path && !k_imgs[i].sixel)
-	kitty_delete_id(k_imgs[i].id, 0);
-}
-
-
-void
-kitty_place_sixel(int row, int col, KITTY_IMG_S *im)
-{
-#ifdef	_WINDOWS
-    (void) row;
-    (void) col;
-    (void) im;
-#else
-    if(!im || !im->sixel)
-      return;
-
-    fprintf(stdout, "\0337\033[%d;%dH", row + 1, col + 1);
-    kitty_write_raw(im->sixel);
-    kitty_write_raw("\0338");
-#endif
-}
-
-
-void
-kitty_place(int row, int col, KITTY_IMG_S *im)
-{
-#ifdef	_WINDOWS
-    (void) row;
-    (void) col;
-    (void) im;
-#else
-    char ctrl[96];
-    int  tmux;
-
-    if(!im)
-      return;
-
-    if(im->sixel){
-	kitty_place_sixel(row, col, im);
-	return;
-    }
-
-    tmux = (getenv("TMUX") != NULL);
-    if(tmux)
-      fprintf(stdout, "\033Ptmux;\033\033[%d;%dH\033\\", row + 1, col + 1);
-    else
-      fprintf(stdout, "\033[%d;%dH", row + 1, col + 1);
-
-    snprintf(ctrl, sizeof(ctrl), "a=p,i=%u,c=%d,r=%d,C=1,q=2",
-	     im->id, im->cols, im->rows);
-    kitty_write_apc(ctrl, NULL);
-#endif
-}
-
-
-int
+static int
 kitty_handle_on_line(char *line, int length, HANDLE_S *handles, HANDLE_S **hp)
 {
     unsigned char c;
@@ -1797,127 +1434,563 @@ kitty_handle_on_line(char *line, int length, HANDLE_S *handles, HANDLE_S **hp)
 }
 
 
-long
-kitty_current_rawno(void)
+/*
+ * Column of the first visible character on the handle line, so the
+ * thumbnail lines up with the view margin or a quote prefix.
+ */
+static int
+kitty_line_indent(char *line, int length)
 {
-    if(!(ps_global && ps_global->msgmap && ps_global->mail_stream))
-      return(0L);
+    int col = 0;
 
-    return(mn_m2raw(ps_global->msgmap, mn_get_cur(ps_global->msgmap)));
+    while(length > 0){
+	unsigned char c = (unsigned char) *line;
+
+	if(c == (unsigned char) TAG_EMBED && length > 1){
+	    int n;
+
+	    switch(line[1]){
+	      case TAG_HANDLE :
+		if(length < 3)
+		  return(col);
+
+		n = (unsigned char) line[2];
+		if(n > length - 3)
+		  return(col);
+
+		line += 3 + n;
+		length -= 3 + n;
+		break;
+
+	      case TAG_FGCOLOR :
+	      case TAG_BGCOLOR :
+		if(length < 2 + RGBLEN)
+		  return(col);
+
+		line += 2 + RGBLEN;
+		length -= 2 + RGBLEN;
+		break;
+
+	      default :
+		line += 2;
+		length -= 2;
+		break;
+	    }
+
+	    continue;
+	}
+
+	if(c == ' ' || c == '>'){
+	    col++;
+	    line++;
+	    length--;
+	    continue;
+	}
+
+	break;
+    }
+
+    return(col);
 }
 
 
-int
-kitty_extract_part(ATTACH_S *a, long int msgno, char **pathp)
+/*----------------------------------------------------------------------
+   Terminal output
+  ----*/
+
+/*
+ * Write bytes to the terminal, wrapped in a tmux passthrough (with
+ * ESC doubled) when asked and we are inside tmux.
+ */
+static void
+kitty_emit(const char *s, size_t n, int passthrough)
 {
-    STORE_S *so;
-    gf_o_t   pc;
-    char    *err, *path;
+    if(!s || n == 0)
+      return;
 
-    *pathp = NULL;
-    if(!(a && a->number && pathp && ps_global && ps_global->mail_stream))
-      return(0);
+    if(passthrough && kitty_in_tmux()){
+	fputs("\033Ptmux;", stdout);
+	for(; n > 0; n--, s++){
+	    if(*s == '\033')
+	      fputc('\033', stdout);
 
-    path = temp_nam(NULL, "ki");
-    if(!path)
-      return(0);
+	    fputc(*s, stdout);
+	}
 
-    so = so_get(FileStar, path, WRITE_ACCESS | OWNER_ONLY);
-    if(!so){
-	fs_give((void **) &path);
-	return(0);
+	fputs("\033\\", stdout);
     }
-
-    gf_set_so_writec(&pc, so);
-    err = detach(ps_global->mail_stream, msgno, a->number, 0L, NULL, pc,
-		 NULL, DT_BINARY);
-    gf_clear_so_writec(so);
-    if(so_give(&so))
-      err = "write error";
-
-    if(err || name_file_size(path) <= 0L){
-	dprint((5, "kittyimg: extract failed for %s: %s\n",
-		   a->number, err ? err : "empty"));
-	our_unlink(path);
-	fs_give((void **) &path);
-	return(0);
-    }
-
-    *pathp = path;
-    return(1);
+    else
+      fwrite(s, 1, n, stdout);
 }
 
 
-int
-kitty_decode_data_uri(char *src, char **pathp)
+static void
+kitty_goto(int row, int col)
 {
-    STORE_S *raw, *out;
-    gf_o_t   writec, pc;
-    gf_i_t   readc;
-    char    *comma, *payload, *path, *err = NULL;
-    int	     is_b64 = 0;
-
-    *pathp = NULL;
-    if(!src)
-      return(0);
-
-    if(!struncmp(src, "data:", 5))
-      src += 5;
-
-    comma = strchr(src, ',');
-    if(!comma || !comma[1])
-      return(0);
-
-    payload = comma + 1;
-    if(srchstr(src, "base64") != NULL)
-      is_b64 = 1;
-
-    if((size_t) (comma - src) > 6 && !struncmp(src, "image/", 6))
-      /* keep going */ ;
-
-    path = temp_nam(NULL, "kd");
-    if(!path)
-      return(0);
-
-    raw = so_get(CharStar, NULL, EDIT_ACCESS);
-    out = so_get(FileStar, path, WRITE_ACCESS | OWNER_ONLY);
-    if(!(raw && out)){
-	if(raw)
-	  so_give(&raw);
-
-	if(out)
-	  so_give(&out);
-
-	our_unlink(path);
-	fs_give((void **) &path);
-	return(0);
-    }
-
-    gf_set_so_writec(&writec, raw);
-    (void) gf_puts(payload, writec);
-    gf_clear_so_writec(raw);
-
-    so_seek(raw, 0L, 0);
-    gf_set_so_readc(&readc, raw);
-    gf_set_so_writec(&pc, out);
-    gf_filter_init();
-    if(is_b64)
-      gf_link_filter(gf_b64_binary, NULL);
-
-    err = gf_pipe(readc, pc);
-    gf_clear_so_writec(out);
-    gf_clear_so_readc(raw);
-    if(so_give(&out))
-      err = "write error";
-
-    so_give(&raw);
-
-    if(err || name_file_size(path) <= 0L){
-	our_unlink(path);
-	fs_give((void **) &path);
-	return(0);
-    }
-
-    *pathp = path;
-    return(1);
+    fprintf(stdout, "\033[%d;%dH", row + 1, col + 1);
 }
+
+
+static void
+kitty_write_apc(const char *ctrl, const char *payload, size_t paylen)
+{
+    KITTY_SBUF b;
+
+    if(!ctrl)
+      return;
+
+    memset(&b, 0, sizeof(b));
+    kitty_sb_puts(&b, "\033_G");
+    kitty_sb_puts(&b, ctrl);
+    if(payload && paylen){
+	kitty_sb_putc(&b, ';');
+	kitty_sb_put(&b, payload, paylen);
+    }
+
+    kitty_sb_puts(&b, "\033\\");
+    kitty_emit(b.s, b.n, 1);
+    fs_give((void **) &b.s);
+}
+
+
+static void
+kitty_transmit(KITTY_IMG_S *im)
+{
+    char   *b64, ctrl[96];
+    size_t  b64len = 0, off, n;
+
+    if(!im || im->transmitted || !im->thumb)
+      return;
+
+    if(!kitty_thumb_png(im->thumb))
+      return;
+
+    b64 = kitty_b64_bin(im->thumb->png, im->thumb->pnglen, &b64len);
+    if(!b64)
+      return;
+
+    for(off = 0; off < b64len; off += KITTY_CHUNK){
+	int more;
+
+	n = b64len - off;
+	if(n > KITTY_CHUNK)
+	  n = KITTY_CHUNK;
+
+	more = (off + n < b64len) ? 1 : 0;
+	if(off == 0)
+	  snprintf(ctrl, sizeof(ctrl), "a=t,f=100,t=d,i=%u,q=2,m=%d",
+		   im->id, more);
+	else
+	  snprintf(ctrl, sizeof(ctrl), "m=%d,q=2", more);
+
+	kitty_write_apc(ctrl, b64 + off, n);
+    }
+
+    fs_give((void **) &b64);
+    im->transmitted = 1;
+}
+
+
+static void
+kitty_delete_image(unsigned int id)
+{
+    char ctrl[64];
+
+    snprintf(ctrl, sizeof(ctrl), "a=d,d=I,i=%u,q=2", id);	/* frees data */
+    kitty_write_apc(ctrl, NULL, 0);
+}
+
+
+static void
+kitty_delete_placement(unsigned int id, int pid)
+{
+    char ctrl[64];
+
+    snprintf(ctrl, sizeof(ctrl), "a=d,d=i,i=%u,p=%d,q=2", id, pid);
+    kitty_write_apc(ctrl, NULL, 0);
+}
+
+
+/*
+ * Draw rows [cut, cut+vis) of the thumbnail at screen row/col.
+ */
+static void
+kitty_paint_one(KITTY_IMG_S *im, HANDLE_S *h, int row, int col,
+		int cut, int vis, int gfx)
+{
+    KITTY_THUMB_S *t = im->thumb;
+    int		   rowpx, y0, hpx;
+
+    if(!t || t->rows <= 0)
+      return;
+
+    rowpx = t->h / t->rows;
+    y0    = cut * rowpx;
+    hpx   = vis * rowpx;
+    if(y0 >= t->h || hpx <= 0)
+      return;
+
+    if(y0 + hpx > t->h)
+      hpx = t->h - y0;
+
+    if(gfx == GFX_KITTY){
+	char ctrl[160];
+
+	kitty_transmit(im);
+	if(!im->transmitted)
+	  return;
+
+	kitty_goto(row, col);
+	if(cut == 0 && vis == t->rows)
+	  snprintf(ctrl, sizeof(ctrl), "a=p,i=%u,p=%d,c=%d,r=%d,C=1,q=2",
+		   im->id, h->key, t->cols, vis);
+	else
+	  snprintf(ctrl, sizeof(ctrl),
+		   "a=p,i=%u,p=%d,c=%d,r=%d,x=0,y=%d,w=%d,h=%d,C=1,q=2",
+		   im->id, h->key, t->cols, vis, y0, t->w, hpx);
+
+	kitty_write_apc(ctrl, NULL, 0);
+	h->h.img.placed = 1;
+    }
+    else if(gfx == GFX_ITERM){
+	unsigned char *png;
+	char	      *b64, hdr[160];
+	int	       len = 0;
+	size_t	       b64len = 0;
+
+	png = stbi_write_png_to_mem(t->rgba + (size_t) y0 * (size_t) t->w * 4,
+				    t->w * 4, t->w, hpx, 4, &len);
+	if(!png || len <= 0){
+	    if(png)
+	      free(png);
+
+	    return;
+	}
+
+	b64 = kitty_b64_bin(png, (size_t) len, &b64len);
+	free(png);
+	if(!b64)
+	  return;
+
+	fputs("\0337", stdout);
+	kitty_goto(row, col);
+	snprintf(hdr, sizeof(hdr),
+		 "\033]1337;File=inline=1;size=%d;width=%d;height=%d;preserveAspectRatio=0:",
+		 len, t->cols, vis);
+	if(kitty_in_tmux()){
+	    KITTY_SBUF b;
+
+	    memset(&b, 0, sizeof(b));
+	    kitty_sb_puts(&b, hdr);
+	    kitty_sb_put(&b, b64, b64len);
+	    kitty_sb_putc(&b, '\007');
+	    kitty_emit(b.s, b.n, 1);
+	    fs_give((void **) &b.s);
+	}
+	else{
+	    fputs(hdr, stdout);
+	    fwrite(b64, 1, b64len, stdout);
+	    fputc('\007', stdout);
+	}
+
+	fputs("\0338", stdout);
+	fs_give((void **) &b64);
+    }
+    else if(gfx == GFX_SIXEL){
+	char *six = kitty_sixel_encode(t, y0, hpx);
+
+	if(!six)
+	  return;
+
+	fputs("\0337", stdout);
+	kitty_goto(row, col);
+	kitty_emit(six, strlen(six), 1);
+	fputs("\0338", stdout);
+	fs_give((void **) &six);
+    }
+}
+
+
+/*----------------------------------------------------------------------
+   Encoders
+  ----*/
+
+static void
+kitty_sb_put(KITTY_SBUF *b, const char *p, size_t n)
+{
+    if(!b || !p || n == 0)
+      return;
+
+    if(b->n + n + 1 > b->a){
+	b->a = b->a ? b->a : 1024;
+	while(b->n + n + 1 > b->a)
+	  b->a *= 2;
+
+	if(b->s)
+	  fs_resize((void **) &b->s, b->a);
+	else
+	  b->s = (char *) fs_get(b->a);
+    }
+
+    memcpy(b->s + b->n, p, n);
+    b->n += n;
+    b->s[b->n] = '\0';
+}
+
+
+static void
+kitty_sb_puts(KITTY_SBUF *b, const char *p)
+{
+    if(p)
+      kitty_sb_put(b, p, strlen(p));
+}
+
+
+static void
+kitty_sb_putc(KITTY_SBUF *b, int c)
+{
+    char ch = (char) c;
+
+    kitty_sb_put(b, &ch, 1);
+}
+
+
+static void
+kitty_sixel_run(KITTY_SBUF *b, int ch, int n)
+{
+    char tmp[24];
+
+    if(n <= 0 || ch < 0)
+      return;
+
+    if(n >= 3){
+	snprintf(tmp, sizeof(tmp), "!%d%c", n, ch);
+	kitty_sb_puts(b, tmp);
+    }
+    else{
+	while(n-- > 0)
+	  kitty_sb_putc(b, ch);
+    }
+}
+
+
+/*
+ * Sixel-encode rows [y0, y0+h) of the thumbnail with a 6x6x6 palette,
+ * Floyd-Steinberg dithering, and transparent padding left unpainted.
+ */
+static char *
+kitty_sixel_encode(KITTY_THUMB_S *t, int y0, int h)
+{
+    KITTY_SBUF	   b;
+    unsigned char *idx;
+    int		  *cur, *nxt, *tmpe;
+    int		   w, x, y, c, band, dy, color, used[216], band_used[216];
+    char	   tmp[48];
+
+    if(!t || !t->rgba || h <= 0 || y0 < 0 || y0 + h > t->h)
+      return(NULL);
+
+    w = t->w;
+    memset(&b, 0, sizeof(b));
+    idx = (unsigned char *) fs_get((size_t) w * (size_t) h);
+    cur = (int *) fs_get((size_t) (w + 2) * 3 * sizeof(int));
+    nxt = (int *) fs_get((size_t) (w + 2) * 3 * sizeof(int));
+    memset(cur, 0, (size_t) (w + 2) * 3 * sizeof(int));
+    memset(used, 0, sizeof(used));
+
+    for(y = 0; y < h; y++){
+	unsigned char *row = t->rgba + (size_t) (y0 + y) * (size_t) w * 4;
+
+	memset(nxt, 0, (size_t) (w + 2) * 3 * sizeof(int));
+	for(x = 0; x < w; x++){
+	    int q[3], e[3];
+
+	    if(row[x * 4 + 3] < 128){
+		idx[y * w + x] = 255;		/* transparent */
+		continue;
+	    }
+
+	    for(c = 0; c < 3; c++){
+		int v = row[x * 4 + c] + cur[(x + 1) * 3 + c] / 16;
+
+		if(v < 0)
+		  v = 0;
+
+		if(v > 255)
+		  v = 255;
+
+		q[c] = (v * 5 + 127) / 255;
+		e[c] = v - q[c] * 51;
+	    }
+
+	    idx[y * w + x] = (unsigned char) (q[0] * 36 + q[1] * 6 + q[2]);
+	    used[idx[y * w + x]] = 1;
+
+	    for(c = 0; c < 3; c++){
+		cur[(x + 2) * 3 + c] += e[c] * 7;
+		nxt[(x) * 3 + c]     += e[c] * 3;
+		nxt[(x + 1) * 3 + c] += e[c] * 5;
+		nxt[(x + 2) * 3 + c] += e[c] * 1;
+	    }
+	}
+
+	tmpe = cur;
+	cur = nxt;
+	nxt = tmpe;
+    }
+
+    kitty_sb_puts(&b, "\033P7;1;0q");
+    snprintf(tmp, sizeof(tmp), "\"1;1;%d;%d", w, h);
+    kitty_sb_puts(&b, tmp);
+
+    for(color = 0; color < 216; color++){
+	if(!used[color])
+	  continue;
+
+	snprintf(tmp, sizeof(tmp), "#%d;2;%d;%d;%d",
+		 color,
+		 (color / 36) * 20,
+		 ((color / 6) % 6) * 20,
+		 (color % 6) * 20);
+	kitty_sb_puts(&b, tmp);
+    }
+
+    for(band = 0; band < (h + 5) / 6; band++){
+	int first = 1;
+
+	memset(band_used, 0, sizeof(band_used));
+	for(dy = 0; dy < 6; dy++){
+	    y = band * 6 + dy;
+	    if(y >= h)
+	      break;
+
+	    for(x = 0; x < w; x++)
+	      if(idx[y * w + x] != 255)
+		band_used[idx[y * w + x]] = 1;
+	}
+
+	for(color = 0; color < 216; color++){
+	    int run = 0, last = -1;
+
+	    if(!band_used[color])
+	      continue;
+
+	    if(!first)
+	      kitty_sb_putc(&b, '$');
+
+	    first = 0;
+	    snprintf(tmp, sizeof(tmp), "#%d", color);
+	    kitty_sb_puts(&b, tmp);
+
+	    for(x = 0; x < w; x++){
+		int six = 0, ch;
+
+		for(dy = 0; dy < 6; dy++){
+		    y = band * 6 + dy;
+		    if(y < h && idx[y * w + x] == color)
+		      six |= 1 << dy;
+		}
+
+		ch = '?' + six;
+		if(ch == last)
+		  run++;
+		else{
+		    kitty_sixel_run(&b, last, run);
+		    last = ch;
+		    run = 1;
+		}
+	    }
+
+	    kitty_sixel_run(&b, last, run);
+	}
+
+	kitty_sb_putc(&b, '-');
+    }
+
+    kitty_sb_puts(&b, "\033\\");
+    fs_give((void **) &idx);
+    fs_give((void **) &cur);
+    fs_give((void **) &nxt);
+    return(b.s);
+}
+
+
+static char *
+kitty_b64_bin(const unsigned char *s, size_t srcl, size_t *outlen)
+{
+    static const char v[] =
+	"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    size_t	   n;
+    unsigned char *d, *ret;
+
+    if(!s)
+      return(NULL);
+
+    n = ((srcl + 2) / 3) * 4;
+    ret = (unsigned char *) fs_get(n + 1);
+    d = ret;
+    for(; srcl >= 3; s += 3, srcl -= 3){
+	*d++ = v[s[0] >> 2];
+	*d++ = v[((s[0] << 4) + (s[1] >> 4)) & 0x3f];
+	*d++ = v[((s[1] << 2) + (s[2] >> 6)) & 0x3f];
+	*d++ = v[s[2] & 0x3f];
+    }
+
+    if(srcl){
+	*d++ = v[s[0] >> 2];
+	*d++ = v[((s[0] << 4) + (--srcl ? (s[1] >> 4) : 0)) & 0x3f];
+	*d++ = srcl ? v[(s[1] << 2) & 0x3f] : '=';
+	*d++ = '=';
+    }
+
+    *d = '\0';
+    if(outlen)
+      *outlen = (size_t) (d - ret);
+
+    return((char *) ret);
+}
+
+
+static unsigned char *
+kitty_b64_dec(const char *s, size_t n, size_t *outlen)
+{
+    unsigned char *out, *d;
+    unsigned long  acc = 0;
+    int		   bits = 0;
+    size_t	   i;
+
+    out = (unsigned char *) fs_get(n / 4 * 3 + 4);
+    d = out;
+    for(i = 0; i < n; i++){
+	int c = (unsigned char) s[i], v;
+
+	if(c >= 'A' && c <= 'Z')
+	  v = c - 'A';
+	else if(c >= 'a' && c <= 'z')
+	  v = c - 'a' + 26;
+	else if(c >= '0' && c <= '9')
+	  v = c - '0' + 52;
+	else if(c == '+' || c == '-')
+	  v = 62;
+	else if(c == '/' || c == '_')
+	  v = 63;
+	else if(c == '=')
+	  break;
+	else if(isspace(c))
+	  continue;
+	else
+	  break;
+
+	acc = (acc << 6) | (unsigned long) v;
+	bits += 6;
+	if(bits >= 8){
+	    bits -= 8;
+	    *d++ = (unsigned char) ((acc >> bits) & 0xff);
+	}
+    }
+
+    *outlen = (size_t) (d - out);
+    return(out);
+}
+
+#endif /* !_WINDOWS */

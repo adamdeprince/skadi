@@ -633,13 +633,18 @@ Additions include:
      implementation.
 
 <LI> Alpine can display image attachments and HTML inline images directly
-     in the message viewer. Kitty's graphics protocol is used when the
-     terminal supports it; otherwise sixels are used. Thumbnails are
-     sized in cells (not pixels) so they stay consistent across display
-     resolutions, and cell size is re-measured on every resize. This
-     is controlled by
+     in the message viewer. Images are decoded by Alpine itself (no
+     external programs), shown as thumbnails that fit a cell box, and
+     drawn with the kitty graphics protocol, iTerm2's inline images, or
+     sixels, whichever the terminal supports. Kitty images work over
+     ssh. Each image has a selectable &quot;[Image: ...]&quot; line;
+     pressing Enter on it opens the full-size image. This is controlled
+     by
      <a href="h_config_kitty_inline_images"><!--#echo var="FEAT_enable-kitty-inline-images"--></a>
-     (enabled by default).
+     (enabled by default), with the thumbnail size and count set by
+     <a href="h_config_inline_image_size"><!--#echo var="VAR_inline-image-max-size"--></a>
+     and
+     <a href="h_config_inline_image_count"><!--#echo var="VAR_inline-image-max-count"--></a>.
 
 <LI> Alpine keeps an offline cache of remote folders it has already
      opened. Envelopes, flags, headers, and message bodies that have
@@ -5709,6 +5714,8 @@ There are also additional details on
 <li><a href="h_config_mailcap_path">OPTION: <!--#echo var="VAR_mailcap-search-path"--></a>
 <li><a href="h_config_maildropcheck">OPTION: <!--#echo var="VAR_maildrop-check-minimum"--></a>
 <li><a href="h_config_maxremstream">OPTION: <!--#echo var="VAR_max-remote-connections"--></a>
+<li><a href="h_config_inline_image_size">OPTION: <!--#echo var="VAR_inline-image-max-size"--></a>
+<li><a href="h_config_inline_image_count">OPTION: <!--#echo var="VAR_inline-image-max-count"--></a>
 <li><a href="h_config_metamsg_color">OPTION: Meta-Message Color</a>
 <li><a href="h_config_mimetype_path">OPTION: <!--#echo var="VAR_mimetype-search-path"--></a>
 <li><a href="h_config_new_ver_quell">OPTION: <!--#echo var="VAR_new-version-threshold"--></a>
@@ -32352,26 +32359,78 @@ to the displayed text.
 <H1>FEATURE: <!--#echo var="FEAT_enable-kitty-inline-images"--></H1>
 
 When this feature is enabled, image attachments and HTML inline images
-(cid: and data: URIs) are drawn in the message text. Alpine prefers
-the kitty graphics protocol and falls back to sixels when the terminal
-does not support kitty graphics.
+(cid: and data: URIs) are drawn in the message text. Alpine decodes
+PNG, JPEG, GIF, BMP and PNM images itself; no external programs are
+run. Other formats, and images that are too large, get the usual
+text line instead.
 <P>
-Thumbnails are sized in cells (at most 32 columns by 8 rows, keeping
-the image's aspect ratio), not in pixels. Cell width and height are
-measured so the drawing fills that cell box at the current resolution.
-Every terminal size change is treated as a possible resolution change
-and cell size is measured again.
+Each image is preceded by a selectable line of the form
+<TT>[Image: name]</TT>. Move to it with the arrow keys or Tab and
+press Enter to open the full-size image with the usual attachment
+viewer.
 <P>
-Remote http(s) images are not fetched. If a decoder or resizer is
-needed, Alpine will try <TT>sips</TT>, <TT>magick</TT>, or
-<TT>convert</TT>.
+Thumbnails fit a box of terminal cells set by
+<A HREF="h_config_inline_image_size"><!--#echo var="VAR_inline-image-max-size"--></A>
+(default 32 columns by 8 rows), keeping the image's aspect ratio and
+never enlarging it. At most
+<A HREF="h_config_inline_image_count"><!--#echo var="VAR_inline-image-max-count"--></A>
+images are drawn per message. Cell width and height are measured so
+the thumbnail fills its cells at the current resolution, and are
+measured again after every terminal resize. Decoded thumbnails are
+cached for the session, so scrolling, re-viewing and resizing do not
+decode again.
+<P>
+The drawing method is chosen from the terminal: the kitty graphics
+protocol (kitty, WezTerm, Ghostty and others), iTerm2's inline image
+sequence, or sixels. Kitty images are sent as data, so they work over
+ssh. Remote http(s) images are never fetched.
 <P>
 This feature is on by default. Turn it off if you do not want images
 drawn in the viewer.
 <P>
-Under tmux, kitty images need passthrough
-(<TT>set -g allow-passthrough on</TT>). Sixel support requires a tmux
-new enough to display sixels natively.
+Under tmux, kitty and iTerm2 images need passthrough
+(<TT>set -g allow-passthrough on</TT>), and sixels need a tmux new
+enough to display them.
+<P>
+&lt;End of help on this topic&gt;
+</BODY>
+</HTML>
+====== h_config_inline_image_size =====
+<HTML>
+<HEAD>
+<TITLE>OPTION: <!--#echo var="VAR_inline-image-max-size"--></TITLE>
+</HEAD>
+<BODY>
+<H1>OPTION: <!--#echo var="VAR_inline-image-max-size"--></H1>
+
+The largest inline image thumbnail, given as columns and rows of
+terminal cells in the form <TT>COLUMNSxROWS</TT>. The default is
+<TT>32x8</TT>. Images are scaled down to fit this box, keeping their
+aspect ratio, and are never enlarged. Columns may be 4 to 400 and rows
+1 to 100; anything else means the default.
+<P>
+This option only matters when
+<A HREF="h_config_kitty_inline_images"><!--#echo var="FEAT_enable-kitty-inline-images"--></A>
+is enabled.
+<P>
+&lt;End of help on this topic&gt;
+</BODY>
+</HTML>
+====== h_config_inline_image_count =====
+<HTML>
+<HEAD>
+<TITLE>OPTION: <!--#echo var="VAR_inline-image-max-count"--></TITLE>
+</HEAD>
+<BODY>
+<H1>OPTION: <!--#echo var="VAR_inline-image-max-count"--></H1>
+
+The most inline images that will be drawn in a single message. The
+default is <TT>12</TT>. Images beyond this number are shown as their
+usual text line. Set it to <TT>0</TT> for no limit.
+<P>
+This option only matters when
+<A HREF="h_config_kitty_inline_images"><!--#echo var="FEAT_enable-kitty-inline-images"--></A>
+is enabled.
 <P>
 &lt;End of help on this topic&gt;
 </BODY>

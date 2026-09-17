@@ -3261,6 +3261,7 @@ void	  html_a_relative(char *, char *, HANDLE_S *);
 int	  html_href_relative(char *);
 int	  html_indent(FILTER_S *, int, int);
 void	  html_blank(FILTER_S *, int);
+void	  html_image_block(FILTER_S *, int, char *, int);
 void	  html_newline(FILTER_S *);
 void	  html_output(FILTER_S *, int);
 void	  html_output_string(FILTER_S *, char *);
@@ -4502,18 +4503,8 @@ html_img(HANDLER_S *hd, int ch, int cmd)
 		      h->h.img.kitty_id = kid;
 		      h->h.img.rows     = rows;
 		      h->h.img.cols     = cols;
-		      html_output(hd->html_data, HTML_NEWLINE);
-		      html_output(hd->html_data, TAG_EMBED);
-		      html_output(hd->html_data, TAG_HANDLE);
-		      snprintf(buf, sizeof(buf), "%d", h->key);
-		      n = strlen(buf);
-		      html_output(hd->html_data, n);
-		      for(i = 0; i < n; i++)
-			html_output(hd->html_data, (unsigned char) buf[i]);
-
-		      html_blank(hd->html_data, rows);
-		      html_output(hd->html_data, TAG_EMBED);
-		      html_output(hd->html_data, TAG_HANDLEOFF);
+		      h->h.img.attach   = kitty_img_attach_for_cid(src + 4);
+		      html_image_block(hd->html_data, h->key, h->h.img.alt, rows);
 		      return(0);
 		  }
 
@@ -4546,18 +4537,7 @@ html_img(HANDLER_S *hd, int ch, int cmd)
 		      h->h.img.kitty_id = kid;
 		      h->h.img.rows     = rows;
 		      h->h.img.cols     = cols;
-		      html_output(hd->html_data, HTML_NEWLINE);
-		      html_output(hd->html_data, TAG_EMBED);
-		      html_output(hd->html_data, TAG_HANDLE);
-		      snprintf(buf, sizeof(buf), "%d", h->key);
-		      n = strlen(buf);
-		      html_output(hd->html_data, n);
-		      for(i = 0; i < n; i++)
-			html_output(hd->html_data, (unsigned char) buf[i]);
-
-		      html_blank(hd->html_data, rows);
-		      html_output(hd->html_data, TAG_EMBED);
-		      html_output(hd->html_data, TAG_HANDLEOFF);
+		      html_image_block(hd->html_data, h->key, h->h.img.alt, rows);
 		      return(0);
 		  }
 
@@ -8183,6 +8163,44 @@ html_blank(FILTER_S *f, int n)
 	html_output(f, HTML_NEWLINE);
 }
 
+
+
+/*
+ * html_image_block -- write the selectable "[Image: ...]" handle line
+ * for an inline image, then the blank rows its thumbnail is painted on.
+ * Inside <pre> the blank-line accounting is off, so newlines are
+ * written directly there.
+ */
+void
+html_image_block(FILTER_S *f, int key, char *alt, int rows)
+{
+    char buf[32], text[128];
+    int  i, n;
+
+    if(f->f2 || f->n || CENTER_BIT(f) || HD(f)->centered || WRAPPED_LEN(f))
+      html_output(f, HTML_NEWLINE);
+
+    snprintf(buf, sizeof(buf), "%d", key);
+    n = strlen(buf);
+    html_output(f, TAG_EMBED);
+    html_output(f, TAG_HANDLE);
+    html_output(f, n);
+    for(i = 0; i < n; i++)
+      html_output(f, (unsigned char) buf[i]);
+
+    kitty_img_alt(alt, text, sizeof(text));
+    html_output_string(f, text);
+    html_output(f, TAG_EMBED);
+    html_output(f, TAG_HANDLEOFF);
+
+    if(HD(f)->wrapstate)
+      html_blank(f, rows);
+    else{
+	html_output(f, HTML_NEWLINE);
+	for(i = 0; i < rows; i++)
+	  html_output(f, HTML_NEWLINE);
+    }
+}
 
 
 /*
