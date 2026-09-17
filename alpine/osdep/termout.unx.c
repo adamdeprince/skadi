@@ -953,6 +953,37 @@ CleartoEOS(void)
 
  Result: character output to screen via stdio
   ----*/
+/*
+ * Write text at row/col as an OSC 8 hyperlink to url, straight to the
+ * terminal.  Alpine's own screen image is not told, so only use it on a
+ * row Alpine leaves blank, and expect the terminal to drop the link
+ * when the row is next cleared.  Control characters in url are
+ * dropped so nothing can break out of the sequence.
+ */
+void
+term_hyperlink_at(int row, int col, char *url, char *text, int maxcols)
+{
+    char *p;
+    int   n = 0;
+
+    if(!url || !text || row < 0 || col < 0)
+      return;
+
+    fprintf(stdout, "\033[%d;%dH\033]8;;", row + 1, col + 1);
+    for(p = url; *p; p++)
+      if((unsigned char) *p >= 0x20 && *p != 0x7F)
+	putc(*p, stdout);
+
+    fputs("\033\\", stdout);
+    for(p = text; *p && n < maxcols; p++, n++)
+      putc(((unsigned char) *p >= 0x20 && *p != 0x7F) ? *p : ' ', stdout);
+
+    fputs("\033]8;;\033\\", stdout);
+    fflush(stdout);
+    clear_cursor_pos();
+}
+
+
 int
 outchar(int c)
 {

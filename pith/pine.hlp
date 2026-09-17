@@ -2799,19 +2799,41 @@ You are trying to connect to a server that uses the XOAUTH2 method of
 authentication.
 
 <P>
-In order to complete this process use a browser in the same computer
-that you are using Alpine to open the given URL.
+Alpine shows the authorization URL and, when it can, opens it in a
+browser on this computer. The line under the title bar is a clickable
+link to the same page in terminals that support links (in kitty, click
+it, or Ctrl+Shift+click when mouse support is turned on in Alpine).
 
 <P>
-You will be sent to authenticate and later to authorize Alpine access to
-your email. Once you have completed the authorization process you will get
-a code. Input this code into Alpine by pressing 'C'. If you do not see a
-code, but see an error message in your browser, copy and paste the URL of
-the error page and paste into alpine after pressing the 'C' key.
+For providers whose registered redirect address is
+<TT>http://localhost</TT> (for example Gmail and Outlook), Alpine
+listens on a port on this computer's loopback interface and sends that
+address to the provider. When you finish signing in, the browser is
+sent back to that address and Alpine picks up the authorization code
+by itself; this screen then continues without any further input. The
+redirect must carry the same <EM>state</EM> value Alpine sent, so a
+stray request to that port cannot be mistaken for the real thing.
 
 <P>
-After you have input the code, Alpine will conclude logging you into your
-account.
+If you are running Alpine over ssh, the browser on your own computer
+cannot reach that port unless you forward it. The screen shows the
+port number; forward it with
+<TT>ssh -R <EM>port</EM>:localhost:<EM>port</EM> <EM>host</EM></TT>
+before you open the link. Without the forward, finish signing in
+anyway, copy the address of the page the browser ends up on (it
+contains <TT>code=</TT>), press 'C', and paste it. Alpine takes the
+code out of that address.
+
+<P>
+Providers that hand you a code on a web page instead of redirecting
+work as before: copy the code, press 'C', and enter it.
+
+<P>
+Press 'E' at any time to give up and try another method.
+
+<P>
+After Alpine has the code, it exchanges it for the tokens it needs and
+concludes logging you into your account.
 
 <P>
 If your version of Alpine was compiled to save passwords, then Alpine will save

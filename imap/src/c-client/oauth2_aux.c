@@ -34,21 +34,66 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <string.h>
+#include <strings.h>
+#include <ctype.h>
+#include <time.h>
 #endif
 
-static int oauth2_lb_fd = -1;
+/*
+ * Loopback listener for the OAuth2 authorization redirect.
+ *
+ * Providers that register "http://localhost" or "http://127.0.0.1" as
+ * the redirect URI accept any port on the loopback interface.  We
+ * listen on an ephemeral port there (IPv4, and IPv6 too when the same
+ * port is free), hand that address to the provider as redirect_uri,
+ * and pick the authorization code out of the browser's redirect.  The
+ * state parameter in the redirect has to match the one we sent.
+ *
+ * Nothing here blocks for longer than the caller asks: Alpine polls
+ * with oauth2_loopback_poll() from its keyboard wait so the screen
+ * stays responsive and the user can cancel at any time.
+ */
 
+#define OA2_LB_MAXFD	2
+#define OA2_LB_REQMAX	16384
+#define OA2_LB_LINEMAX	4096
+
+static int	oa2_lb_fd[OA2_LB_MAXFD] = { -1, -1 };
+static int	oa2_lb_nfd = 0;
+static unsigned	oa2_lb_port = 0;
+static char    *oa2_lb_state = NULL;	/* state we expect back */
+static char    *oa2_lb_redirect = NULL;	/* redirect_uri we installed */
+static char	oa2_lb_error[256];
+static int	oa2_lb_done = 0;
+
+/* LOOPBACK-PARSE-BEGIN: libc only, so a harness can compile this region */
+
+static int
+oa2_lb_hexval(int c)
+{
+    if(c >= '0' && c <= '9') return(c - '0');
+    if(c >= 'a' && c <= 'f') return(c - 'a' + 10);
+    if(c >= 'A' && c <= 'F') return(c - 'A' + 10);
+    return(-1);
+}
+
+
+/*
+ * Decode %XX and '+' in place.
+ */
 static void
-oauth2_url_decode(char *s)
+oa2_lb_url_decode(char *s)
 {
     char *d, *p;
-    int v;
+    int hi, lo;
+
+    if(!s)
+      return;
 
     for(d = p = s; *p; ){
-	if(*p == '%' && isxdigit((unsigned char) p[1])
-	   && isxdigit((unsigned char) p[2])){
-	    sscanf(p + 1, "%2x", &v);
-	    *d++ = (char) v;
+	if(*p == '%' && (hi = oa2_lb_hexval((unsigned char) p[1])) >= 0
+	   && (lo = oa2_lb_hexval((unsigned char) p[2])) >= 0){
+	    *d++ = (char) ((hi << 4) | lo);
 	    p += 3;
 	}
 	else if(*p == '+'){
@@ -58,150 +103,543 @@ oauth2_url_decode(char *s)
 	else
 	  *d++ = *p++;
     }
+
     *d = '\0';
 }
 
 
-int
-oauth2_loopback_start(OAUTH2_S *oauth2)
+/*
+ * Split the request line "METHOD SP TARGET SP HTTP/x.y" of req (which
+ * is modified in place).  TARGET is split at '?' into path and query.
+ * Returns 1 when the line is well formed, 0 otherwise.
+ */
+static int
+oa2_lb_parse_request(char *req, char **method, char **path, char **query)
 {
-#if defined(_MSC_VER) || defined(_WINDOWS)
-    return(-1);
-#else
+    char *eol, *sp1, *sp2, *q;
+
+    *method = *path = *query = NULL;
+    if(!req)
+      return(0);
+
+    eol = strpbrk(req, "\r\n");
+    if(!eol || (eol - req) > OA2_LB_LINEMAX)
+      return(0);
+
+    *eol = '\0';
+
+    sp1 = strchr(req, ' ');
+    if(!sp1 || sp1 == req)
+      return(0);
+
+    *sp1 = '\0';
+    sp2 = strchr(sp1 + 1, ' ');
+    if(!sp2 || sp2 == sp1 + 1)
+      return(0);
+
+    *sp2 = '\0';
+    if(strncmp(sp2 + 1, "HTTP/", 5) != 0)
+      return(0);
+
+    *method = req;
+    *path = sp1 + 1;
+    q = strchr(*path, '?');
+    if(q){
+	*q = '\0';
+	*query = q + 1;
+    }
+    else
+      *query = "";
+
+    if(**path != '/')
+      return(0);
+
+    return(1);
+}
+
+
+/*
+ * Copy the decoded value of the query parameter called name into dst.
+ * Returns dst, or NULL if the parameter is absent.
+ */
+static char *
+oa2_lb_query_value(const char *query, const char *name, char *dst, size_t dstlen)
+{
+    const char *p, *amp, *eq;
+    char key[128];
+    size_t klen, vlen;
+
+    if(!query || !name || !dst || dstlen < 1)
+      return(NULL);
+
+    for(p = query; *p; p = amp && *amp ? amp + 1 : p + strlen(p)){
+	amp = strchr(p, '&');
+	if(!amp)
+	  amp = p + strlen(p);
+
+	eq = memchr(p, '=', (size_t) (amp - p));
+	klen = (size_t) ((eq ? eq : amp) - p);
+	if(klen >= sizeof(key))
+	  continue;
+
+	memcpy(key, p, klen);
+	key[klen] = '\0';
+	oa2_lb_url_decode(key);
+	if(strcmp(key, name) != 0)
+	  continue;
+
+	vlen = eq ? (size_t) (amp - (eq + 1)) : 0;
+	if(vlen >= dstlen)
+	  vlen = dstlen - 1;
+
+	memcpy(dst, eq ? eq + 1 : "", vlen);
+	dst[vlen] = '\0';
+	oa2_lb_url_decode(dst);
+	return(dst);
+    }
+
+    return(NULL);
+}
+
+
+/*
+ * Is uri "http://localhost" or "http://127.0.0.1", optionally followed
+ * by a port, a path or a query?  Those are the redirect URIs that let
+ * a native app pick any loopback port.
+ */
+static int
+oa2_lb_is_loopback_uri(const char *uri)
+{
+    static const char *hosts[] = { "http://localhost", "http://127.0.0.1", NULL };
+    int i;
+    size_t n;
+
+    if(!uri)
+      return(0);
+
+    for(i = 0; hosts[i]; i++){
+	n = strlen(hosts[i]);
+	if(strncasecmp(uri, hosts[i], n) == 0
+	   && (uri[n] == '\0' || uri[n] == '/' || uri[n] == ':' || uri[n] == '?'))
+	  return(1);
+    }
+
+    return(0);
+}
+
+/* LOOPBACK-PARSE-END */
+
+
+#if !defined(_MSC_VER) && !defined(_WINDOWS)
+
+static void
+oa2_lb_set_error(const char *msg)
+{
+    if(!msg)
+      oa2_lb_error[0] = '\0';
+    else{
+	strncpy(oa2_lb_error, msg, sizeof(oa2_lb_error) - 1);
+	oa2_lb_error[sizeof(oa2_lb_error) - 1] = '\0';
+    }
+}
+
+
+static int
+oa2_lb_listen(int family, unsigned port)
+{
     int fd, on = 1;
-    struct sockaddr_in addr;
-    socklen_t alen = sizeof(addr);
-    char redir[128];
-    unsigned port;
+    struct sockaddr_storage ss;
+    socklen_t alen;
 
-    oauth2_loopback_stop();
+    memset(&ss, 0, sizeof(ss));
+    if(family == AF_INET){
+	struct sockaddr_in *a = (struct sockaddr_in *) &ss;
 
-    fd = socket(AF_INET, SOCK_STREAM, 0);
+	a->sin_family = AF_INET;
+	a->sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+	a->sin_port = htons((unsigned short) port);
+	alen = sizeof(*a);
+    }
+    else{
+	struct sockaddr_in6 *a = (struct sockaddr_in6 *) &ss;
+
+	a->sin6_family = AF_INET6;
+	a->sin6_addr = in6addr_loopback;
+	a->sin6_port = htons((unsigned short) port);
+	alen = sizeof(*a);
+    }
+
+    fd = socket(family, SOCK_STREAM, 0);
     if(fd < 0)
       return(-1);
 
-    (void) setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    addr.sin_port = 0;
-    if(bind(fd, (struct sockaddr *) &addr, sizeof(addr)) < 0
-       || listen(fd, 4) < 0){
+    (void) fcntl(fd, F_SETFD, FD_CLOEXEC);
+    if(family == AF_INET6)
+      (void) setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &on, sizeof(on));
+
+    if(bind(fd, (struct sockaddr *) &ss, alen) < 0 || listen(fd, 4) < 0){
 	close(fd);
 	return(-1);
     }
 
-    if(getsockname(fd, (struct sockaddr *) &addr, &alen) < 0){
-	close(fd);
-	return(-1);
-    }
-
-    port = (unsigned) ntohs(addr.sin_port);
-    snprintf(redir, sizeof(redir), "http://127.0.0.1:%u/", port);
-    /*
-     * Default redirect_uri is a static string in alpine_oauth2_list
-     * ("http://localhost").  Only free a previous loopback URI.
-     */
-    {
-	char *old = oauth2->param[OA2_Redirect].value;
-
-	oauth2->param[OA2_Redirect].value = cpystr(redir);
-	if(old && !strncmp(old, "http://127.0.0.1:", 17))
-	  fs_give((void **) &old);
-    }
-    oauth2_lb_fd = fd;
     return(fd);
-#endif
+}
+
+
+static unsigned
+oa2_lb_port_of(int fd)
+{
+    struct sockaddr_storage ss;
+    socklen_t alen = sizeof(ss);
+
+    if(getsockname(fd, (struct sockaddr *) &ss, &alen) < 0)
+      return(0);
+
+    if(ss.ss_family == AF_INET)
+      return((unsigned) ntohs(((struct sockaddr_in *) &ss)->sin_port));
+
+    return((unsigned) ntohs(((struct sockaddr_in6 *) &ss)->sin6_port));
+}
+
+
+/*
+ * Start listening.  Returns the port, or 0 when the provider's
+ * redirect_uri is not loopback style or no socket could be opened.
+ */
+int
+oauth2_loopback_start(OAUTH2_S *oauth2)
+{
+    char redir[128], *old, *host;
+    int fd4, fd6;
+
+    oauth2_loopback_stop();
+    oa2_lb_done = 0;
+    oa2_lb_set_error(NULL);
+
+    old = oauth2->param[OA2_Redirect].value;
+    if(old == oa2_lb_redirect && oa2_lb_redirect)	/* ours from a previous try */
+      old = NULL;
+
+    if(!oa2_lb_is_loopback_uri(old))
+      return(0);
+
+    host = (strncasecmp(old, "http://127.0.0.1", 16) == 0) ? "127.0.0.1" : "localhost";
+
+    fd4 = oa2_lb_listen(AF_INET, 0);
+    if(fd4 < 0)
+      return(0);
+
+    oa2_lb_port = oa2_lb_port_of(fd4);
+    if(oa2_lb_port == 0){
+	close(fd4);
+	return(0);
+    }
+
+    oa2_lb_fd[oa2_lb_nfd++] = fd4;
+
+    /* localhost may resolve to ::1 first; serve that too when we can */
+    fd6 = oa2_lb_listen(AF_INET6, oa2_lb_port);
+    if(fd6 >= 0)
+      oa2_lb_fd[oa2_lb_nfd++] = fd6;
+
+    snprintf(redir, sizeof(redir), "http://%s:%u/", host, oa2_lb_port);
+
+    if(oa2_lb_redirect)
+      fs_give((void **) &oa2_lb_redirect);
+
+    oa2_lb_redirect = cpystr(redir);
+    /* the provider's default is a static string; never free that */
+    oauth2->param[OA2_Redirect].value = oa2_lb_redirect;
+
+    if(!oauth2->param[OA2_State].value)
+      oauth2->param[OA2_State].value = oauth2_generate_state();
+
+    if(oa2_lb_state)
+      fs_give((void **) &oa2_lb_state);
+
+    oa2_lb_state = cpystr(oauth2->param[OA2_State].value);
+
+    return((int) oa2_lb_port);
 }
 
 
 void
 oauth2_loopback_stop(void)
 {
-#if !defined(_MSC_VER) && !defined(_WINDOWS)
-    if(oauth2_lb_fd >= 0){
-	close(oauth2_lb_fd);
-	oauth2_lb_fd = -1;
-    }
-#endif
+    int i;
+
+    for(i = 0; i < oa2_lb_nfd; i++)
+      if(oa2_lb_fd[i] >= 0){
+	  close(oa2_lb_fd[i]);
+	  oa2_lb_fd[i] = -1;
+      }
+
+    oa2_lb_nfd = 0;
+    oa2_lb_port = 0;
+    if(oa2_lb_state)
+      fs_give((void **) &oa2_lb_state);
+    /* oa2_lb_redirect stays: the token request still needs it */
+}
+
+
+int
+oauth2_loopback_active(void)
+{
+    return(oa2_lb_nfd > 0 && !oa2_lb_done);
+}
+
+
+unsigned
+oauth2_loopback_port(void)
+{
+    return(oa2_lb_nfd > 0 ? oa2_lb_port : 0);
 }
 
 
 char *
+oauth2_loopback_redirect(void)
+{
+    return(oa2_lb_nfd > 0 ? oa2_lb_redirect : NULL);
+}
+
+
+/*
+ * The last problem seen on the listener ("state mismatch", "access
+ * denied"), or NULL.  Cleared by oauth2_loopback_start.
+ */
+const char *
+oauth2_loopback_error(void)
+{
+    return(oa2_lb_error[0] ? oa2_lb_error : NULL);
+}
+
+
+static void
+oa2_lb_send(int cfd, const char *status, const char *body)
+{
+    char hdr[256];
+    int  flags = 0;
+
+#ifdef MSG_NOSIGNAL
+    flags = MSG_NOSIGNAL;
+#endif
+
+    snprintf(hdr, sizeof(hdr),
+	     "HTTP/1.1 %s\r\nContent-Type: text/html; charset=utf-8\r\n"
+	     "Content-Length: %lu\r\nConnection: close\r\n\r\n",
+	     status, (unsigned long) strlen(body));
+    (void) send(cfd, hdr, strlen(hdr), flags);
+    (void) send(cfd, body, strlen(body), flags);
+}
+
+
+static const char *oa2_lb_page_ok =
+    "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Alpine</title></head>"
+    "<body style=\"font-family:sans-serif;padding:2em\">"
+    "<h2>Alpine is authorized</h2>"
+    "<p>You can close this tab and return to Alpine.</p></body></html>";
+
+static const char *oa2_lb_page_denied =
+    "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Alpine</title></head>"
+    "<body style=\"font-family:sans-serif;padding:2em\">"
+    "<h2>Authorization was not granted</h2>"
+    "<p>Return to Alpine to try again or cancel.</p></body></html>";
+
+static const char *oa2_lb_page_bad =
+    "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Alpine</title></head>"
+    "<body style=\"font-family:sans-serif;padding:2em\">"
+    "<h2>Request not accepted</h2>"
+    "<p>This redirect did not match what Alpine is waiting for.</p></body></html>";
+
+static const char *oa2_lb_page_404 =
+    "<!DOCTYPE html><html><body>Not found</body></html>";
+
+
+/*
+ * Read one HTTP request from cfd (headers only, at most two seconds)
+ * and answer it.  Returns the authorization code when the request is
+ * the redirect we are waiting for, NULL otherwise.
+ */
+static char *
+oa2_lb_handle(int cfd)
+{
+    char  *req, *method, *path, *query, *code = NULL;
+    char   val[OA2_LB_LINEMAX];
+    int    got = 0, n;
+    time_t deadline = time(0) + 2;
+
+#ifdef SO_NOSIGPIPE
+    { int on = 1; (void) setsockopt(cfd, SOL_SOCKET, SO_NOSIGPIPE, &on, sizeof(on)); }
+#endif
+    (void) fcntl(cfd, F_SETFD, FD_CLOEXEC);
+
+    req = (char *) fs_get(OA2_LB_REQMAX + 1);
+    req[0] = '\0';
+
+    while(got < OA2_LB_REQMAX){
+	fd_set rfds;
+	struct timeval tv;
+	time_t now = time(0);
+
+	if(now >= deadline)
+	  break;
+
+	FD_ZERO(&rfds);
+	FD_SET(cfd, &rfds);
+	tv.tv_sec = deadline - now;
+	tv.tv_usec = 0;
+	if(select(cfd + 1, &rfds, NULL, NULL, &tv) <= 0){
+	    if(errno == EINTR)
+	      continue;
+
+	    break;
+	}
+
+	n = (int) recv(cfd, req + got, (size_t) (OA2_LB_REQMAX - got), 0);
+	if(n <= 0)
+	  break;
+
+	got += n;
+	req[got] = '\0';
+	if(strstr(req, "\r\n\r\n") || strstr(req, "\n\n"))
+	  break;
+    }
+
+    if(got == 0 || !oa2_lb_parse_request(req, &method, &path, &query)){
+	oa2_lb_send(cfd, "400 Bad Request", oa2_lb_page_bad);
+	goto out;
+    }
+
+    if(strcmp(method, "GET") != 0 && strcmp(method, "HEAD") != 0){
+	oa2_lb_send(cfd, "405 Method Not Allowed", oa2_lb_page_404);
+	goto out;
+    }
+
+    if(strcmp(path, "/") != 0){
+	oa2_lb_send(cfd, "404 Not Found", oa2_lb_page_404);
+	goto out;
+    }
+
+    if(oa2_lb_query_value(query, "error", val, sizeof(val))){
+	char msg[256];
+
+	snprintf(msg, sizeof(msg), "Authorization was refused: %.120s", val);
+	oa2_lb_set_error(msg);
+	oa2_lb_send(cfd, "200 OK", oa2_lb_page_denied);
+	goto out;
+    }
+
+    if(!oa2_lb_query_value(query, "code", val, sizeof(val)) || !val[0]){
+	oa2_lb_send(cfd, "404 Not Found", oa2_lb_page_404);
+	goto out;
+    }
+
+    if(oa2_lb_state){
+	char st[OA2_LB_LINEMAX];
+
+	if(!oa2_lb_query_value(query, "state", st, sizeof(st))
+	   || strcmp(st, oa2_lb_state) != 0){
+	    oa2_lb_set_error("Redirect ignored: state parameter did not match");
+	    oa2_lb_send(cfd, "400 Bad Request", oa2_lb_page_bad);
+	    goto out;
+	}
+    }
+
+    code = cpystr(val);
+    oa2_lb_done = 1;
+    oa2_lb_set_error(NULL);
+    oa2_lb_send(cfd, "200 OK", oa2_lb_page_ok);
+
+out:
+    fs_give((void **) &req);
+    close(cfd);
+    return(code);
+}
+
+
+/*
+ * Wait up to wait_ms milliseconds (0 = just look) for the browser to
+ * come back.  Returns the authorization code (caller frees) or NULL.
+ */
+char *
+oauth2_loopback_poll(int wait_ms)
+{
+    fd_set rfds;
+    struct timeval tv;
+    int i, maxfd = -1, res, cfd;
+
+    if(!oauth2_loopback_active())
+      return(NULL);
+
+    FD_ZERO(&rfds);
+    for(i = 0; i < oa2_lb_nfd; i++){
+	FD_SET(oa2_lb_fd[i], &rfds);
+	if(oa2_lb_fd[i] > maxfd)
+	  maxfd = oa2_lb_fd[i];
+    }
+
+    if(wait_ms < 0)
+      wait_ms = 0;
+
+    tv.tv_sec = wait_ms / 1000;
+    tv.tv_usec = (wait_ms % 1000) * 1000;
+    res = select(maxfd + 1, &rfds, NULL, NULL, &tv);
+    if(res <= 0)
+      return(NULL);
+
+    for(i = 0; i < oa2_lb_nfd; i++){
+	if(!FD_ISSET(oa2_lb_fd[i], &rfds))
+	  continue;
+
+	cfd = accept(oa2_lb_fd[i], NULL, NULL);
+	if(cfd < 0)
+	  continue;
+
+	{ char *code = oa2_lb_handle(cfd);
+
+	  if(code)
+	    return(code);
+	}
+    }
+
+    return(NULL);
+}
+
+
+/*
+ * Blocking form for callers without a user interface.
+ */
+char *
 oauth2_loopback_wait(int timeout_sec)
 {
-#if defined(_MSC_VER) || defined(_WINDOWS)
-    return(NULL);
-#else
     time_t deadline;
-    char buf[8192], *p, *q, *code = NULL;
-    const char *ok =
-	"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n"
-	"Connection: close\r\n\r\n"
-	"<!DOCTYPE html><html><body style=\"font-family:sans-serif;padding:2em\">"
-	"<h2>Alpine is authorized</h2>"
-	"<p>You can close this tab and return to Alpine.</p>"
-	"</body></html>";
-    const char *nocontent =
-	"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n";
+    char *code = NULL;
 
-    if(oauth2_lb_fd < 0)
+    if(!oauth2_loopback_active())
       return(NULL);
 
     if(timeout_sec <= 0)
       timeout_sec = 180;
 
     deadline = time(0) + timeout_sec;
-    while(time(0) < deadline && !code){
-	fd_set rfds;
-	struct timeval tv;
-	int cfd, n, left;
-
-	left = (int) (deadline - time(0));
-	if(left < 1)
-	  break;
-
-	FD_ZERO(&rfds);
-	FD_SET(oauth2_lb_fd, &rfds);
-	tv.tv_sec = left > 5 ? 5 : left;
-	tv.tv_usec = 0;
-	if(select(oauth2_lb_fd + 1, &rfds, NULL, NULL, &tv) <= 0)
-	  continue;
-
-	cfd = accept(oauth2_lb_fd, NULL, NULL);
-	if(cfd < 0)
-	  continue;
-
-	n = (int) recv(cfd, buf, sizeof(buf) - 1, 0);
-	if(n <= 0){
-	    close(cfd);
-	    continue;
-	}
-
-	buf[n] = '\0';
-	p = strstr(buf, "code=");
-	if(!p){
-	    (void) send(cfd, nocontent, strlen(nocontent), 0);
-	    close(cfd);
-	    continue;
-	}
-
-	p += 5;
-	q = p;
-	while(*q && *q != '&' && *q != ' ' && *q != '\r' && *q != '\n')
-	  q++;
-
-	code = fs_get((size_t) (q - p + 1));
-	memcpy(code, p, (size_t) (q - p));
-	code[q - p] = '\0';
-	oauth2_url_decode(code);
-	(void) send(cfd, ok, strlen(ok), 0);
-	close(cfd);
-    }
+    while(!code && time(0) < deadline)
+      code = oauth2_loopback_poll(1000);
 
     return(code);
-#endif
 }
+
+#else /* _WINDOWS */
+
+int oauth2_loopback_start(OAUTH2_S *oauth2) { (void) oauth2; return(0); }
+void oauth2_loopback_stop(void) { }
+int oauth2_loopback_active(void) { return(0); }
+unsigned oauth2_loopback_port(void) { return(0); }
+char *oauth2_loopback_redirect(void) { return(NULL); }
+const char *oauth2_loopback_error(void) { return(NULL); }
+char *oauth2_loopback_poll(int wait_ms) { (void) wait_ms; return(NULL); }
+char *oauth2_loopback_wait(int timeout_sec) { (void) timeout_sec; return(NULL); }
+
+#endif /* _WINDOWS */
 
 OA2_type oauth2_find_extra_parameter(OAUTH2_S *, char *);
 JSON_S *oauth2_json_reply(OAUTH2_SERVER_METHOD_S, OAUTH2_S *, int *);
@@ -565,7 +1003,7 @@ mm_login_oauth2_c_client_method (NETMBX *mb, char *user, char *method,
     * to get an access token and refresh token.
     */
    { OAUTH2_SERVER_METHOD_S RefreshMethod = oauth2->server_mthd[OA2_GetAccessCode];
-     HTTP_PARAM_S params[OAUTH2_PARAM_NUMBER];
+     HTTP_PARAM_S params[OAUTH2_PARAM_NUMBER + 2];
 
      mm_log("Starting AUTHORIZE method. No refresh token nor access token found.", (long) NIL);
 
@@ -574,17 +1012,38 @@ mm_login_oauth2_c_client_method (NETMBX *mb, char *user, char *method,
 
      LOAD_HTTP_PARAMS(RefreshMethod, params);
 
+     /*
+      * The redirect is verified against the state parameter, so make
+      * sure the authorization URL carries one even for providers whose
+      * parameter list leaves it out.
+      */
+     if(oauth2_loopback_active() && oauth2->param[OA2_State].value){
+	int i, have = 0;
+
+	for(i = 0; params[i].name; i++)
+	  if(!strcmp(params[i].name, "state"))
+	    have = 1;
+
+	if(!have && i + 1 < OAUTH2_PARAM_NUMBER + 2){
+	   params[i].name = "state";
+	   params[i].value = oauth2->param[OA2_State].value;
+	   params[i+1].name = params[i+1].value = NULL;
+	}
+     }
+
      if(strcmp(RefreshMethod.name, "GET") == 0){
 	char *server = xoauth2_server(RefreshMethod.urlserver, oauth2->param[OA2_Tenant].value);
 	char *url = http_get_param_url(server, params);
 	oauth2getaccesscode_t ogac = 
 	(oauth2getaccesscode_t) mail_parameters (NIL, GET_OA2CLIENTGETACCESSCODE, NIL);
 
+	/*
+	 * The client polls the loopback listener while it shows the
+	 * URL, so when it comes back without a code the user cancelled;
+	 * do not wait any longer here.
+	 */
 	if(ogac)
 	  oauth2->param[OA2_Code].value = (*ogac)(url, method, oauth2, mb, tryanother);
-
-	if(!oauth2->param[OA2_Code].value)
-	  oauth2->param[OA2_Code].value = oauth2_loopback_wait(180);
 
 	oauth2_loopback_stop();
 
