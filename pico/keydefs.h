@@ -32,6 +32,7 @@
 #undef CTRL
 #define CTRL		0x1000000
 #define FUNC		0x2000000
+#define META		0x8000000
 
 #define KEY_BASE	0x40000000
 #define CCONV_NEEDMORE	(KEY_BASE+1)	/* need more octets */
@@ -65,6 +66,9 @@
 #define KEY_KERMIT	(KEY_BASE+0x115)
 #define KEY_JUNK	(KEY_BASE+0x116)
 #define KEY_RESIZE	(KEY_BASE+0x117)
+#define KEY_PASTE_START	(KEY_BASE+0x128)
+#define KEY_PASTE_END	(KEY_BASE+0x129)
+#define KEY_OSC		(KEY_BASE+0x12a)
 #define CTRL_KEY_UP	(KEY_BASE+0x118)
 #define CTRL_KEY_DOWN	(KEY_BASE+0x119)
 #define CTRL_KEY_RIGHT	(KEY_BASE+0x11a)

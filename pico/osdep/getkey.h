@@ -24,6 +24,14 @@
 /* exported prototypes */
 UCS	      GetKey(void);
 void	      kpinsert(char *, int, int);
+int	      pico_paste_is_fresh(void);
+void	      pico_paste_clear_fresh(void);
+UCS	     *pico_paste_ucs4(int *);
+void	      pico_paste_discard(void);
+int	      pico_paste_queued(void);
+UCS	      pico_paste_take(void);
+int	      pico_paste_collect(int (*)(int (*)(int), void (*)(void)),
+				 int (*)(int), void (*)(void), void *);
 #if	TYPEAH
 int	      typahead(void);
 #endif /* TYPEAH */

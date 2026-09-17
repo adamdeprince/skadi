@@ -1624,6 +1624,9 @@ pretty_command(UCS c)
       case NO_OP_IDLE      : s = "NO_OP_IDLE";		break;
       case NO_OP_COMMAND   : s = "NO_OP_COMMAND";	break;
       case KEY_RESIZE      : s = "KEY_RESIZE";		break;
+      case KEY_PASTE_START : s = "KEY_PASTE_START";	break;
+      case KEY_PASTE_END   : s = "KEY_PASTE_END";	break;
+      case KEY_OSC         : s = "KEY_OSC";		break;
       case KEY_UTF8        : s = "KEY_UTF8";		break;
       case KEY_MOUSE       : s = "KEY_MOUSE";		break;
       case KEY_SCRLUPL     : s = "KEY_SCRLUPL";		break;

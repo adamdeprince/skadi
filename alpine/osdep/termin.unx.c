@@ -332,11 +332,29 @@ read_char(int time_out)
 	return(ch);
     }
 
+    if(pico_paste_queued()){
+	ch = pico_paste_take();
+	goto done;
+    }
+
     if((ch = check_for_timeout(time_out)) != READY_TO_READ)
       goto done;
     
     switch(status = kbseq(pine_simple_ttgetc, key_rec, read_bail,
 			  ps_global->input_cs, &ch)){
+      case KEY_PASTE_START:
+	pico_paste_collect(pine_simple_ttgetc, key_rec, read_bail,
+			   ps_global->input_cs);
+	if(pico_paste_queued())
+	  ch = pico_paste_take();
+	else
+	  ch = NO_OP_COMMAND;
+
+	goto done;
+
+      case KEY_PASTE_END:
+	ch = NO_OP_COMMAND;
+	goto done;
       case KEY_DOUBLE_ESC:
 	/*
 	 * Special hack to get around comm devices eating control characters.
@@ -498,12 +516,42 @@ read_char(int time_out)
 	ch = KEY_JUNK;
 	goto done;
 
+      case NODATA:
+	ch = NO_OP_COMMAND;
+	goto done;
+
+      case KEY_OSC:
+	{
+	    int prev = 0;
+
+	    for(;;){
+		if(check_for_timeout(2) != READY_TO_READ)
+		  break;
+
+		ch = READ_A_CHAR();
+		if(ch == '\007')
+		  break;
+
+		if(prev == '\033' && ch == '\\')
+		  break;
+
+		prev = ch;
+	    }
+	}
+
+	ch = KEY_JUNK;
+	goto done;
+
       case BADESC:
 	ch = KEY_JUNK;
 	goto done;
 
       case 0: 	/* regular character */
       default:
+	if(status & META){
+	    ch = KEY_JUNK;
+	    goto done;
+	}
 	/*
 	 * we used to strip (ch &= 0x7f;), but this seems much cleaner
 	 * in the face of line noise and has the benefit of making it

@@ -54,6 +54,69 @@ tthascap(void)
 }
 
 
+void
+term_bracketed_paste(int on)
+{
+    fputs(on ? "\033[?2004h" : "\033[?2004l", stdout);
+    fflush(stdout);
+}
+
+
+/*
+ * Kitty keyboard protocol (disambiguate escape codes) plus xterm
+ * modifyOtherKeys mode 2.  Alt+letter then arrives as CSI u /
+ * CSI 27;mod;key~ instead of ESC-prefix.  Unknown terminals ignore these.
+ */
+void
+term_keyboard_proto(int on)
+{
+    if(on){
+	fputs("\033[=5u", stdout);	/* kitty: disambiguate + alternate keys */
+	fputs("\033[>4;2m", stdout);	/* modifyOtherKeys = 2 */
+    }
+    else{
+	fputs("\033[=0u", stdout);
+	fputs("\033[>4;0m", stdout);
+    }
+
+    fflush(stdout);
+}
+
+
+/*
+ * Fallback if the terminal still sends ESC then the letter for Alt
+ * (kitty uses CSI u once term_keyboard_proto is on).
+ */
+void
+setup_html_esc_seq(void)
+{
+    kpinsert("\033b", META|'b', 1);
+    kpinsert("\033B", META|'b', 1);
+    kpinsert("\033i", META|'i', 1);
+    kpinsert("\033I", META|'i', 1);
+    kpinsert("\033u", META|'u', 1);
+    kpinsert("\033U", META|'u', 1);
+    kpinsert("\033s", META|'s', 1);
+    kpinsert("\033S", META|'s', 1);
+    kpinsert("\033c", META|'c', 1);
+    kpinsert("\033C", META|'c', 1);
+    kpinsert("\033h", META|'h', 1);
+    kpinsert("\033H", META|'h', 1);
+    kpinsert("\033q", META|'q', 1);
+    kpinsert("\033Q", META|'q', 1);
+    kpinsert("\033p", META|'p', 1);
+    kpinsert("\033P", META|'p', 1);
+    kpinsert("\033r", META|'r', 1);
+    kpinsert("\033R", META|'r', 1);
+    kpinsert("\033l", META|'l', 1);
+    kpinsert("\033L", META|'l', 1);
+    /* not \033O: that is the SS3 prefix for application cursor keys */
+    kpinsert("\033o", META|'o', 1);
+    kpinsert("\033k", META|'k', 1);
+    kpinsert("\033K", META|'k', 1);
+}
+
+
 #if	HAS_TERMINFO
 
 /*
@@ -232,12 +295,10 @@ setup_dflt_esc_seq(void)
     kpinsert("\033[D", KEY_LEFT, 1);
 
     /*
-     * DEC vt52 mode.
+     * DEC vt52 cursor keys were ESC A/B/C/D.  Kitty and every
+     * other current terminal uses CSI / SS3.  Keep ESC B free
+     * for Alt-B (bold).
      */
-    kpinsert("\033A", KEY_UP, 1);
-    kpinsert("\033B", KEY_DOWN, 1);
-    kpinsert("\033C", KEY_RIGHT, 1);
-    kpinsert("\033D", KEY_LEFT, 1);
 
     /*
      * DEC vt52 application keys, and some Zenith 19.
@@ -290,6 +351,15 @@ setup_dflt_esc_seq(void)
      * Fake a control character.
      */
     kpinsert("\033\033", KEY_DOUBLE_ESC, 1);
+
+    /*
+     * Bracketed paste.  Must live alongside \033[2J and \033[1~ in
+     * the trie; the extra digits distinguish them.
+     */
+    kpinsert("\033[200~", KEY_PASTE_START, 1);
+    kpinsert("\033[201~", KEY_PASTE_END, 1);
+    kpinsert("\033]", KEY_OSC, 1);
+    setup_html_esc_seq();
 }
 
 
@@ -534,6 +604,9 @@ tinfoopen(void)
     if((gmode & MDFKEY) && Pmaster == NULL)
       puts("\033[99h");
 
+    term_bracketed_paste(1);
+    term_keyboard_proto(1);
+
     /* return ignored */
     return(0);
 }
@@ -543,6 +616,9 @@ static int
 tinfoclose(void)
 {
     if(!Pmaster){
+	term_keyboard_proto(0);
+	term_bracketed_paste(0);
+
 	if(gmode&MDFKEY)
 	  puts("\033[99l");		/* reset UW-NCSA telnet keys */
 
@@ -1002,12 +1078,10 @@ setup_dflt_esc_seq(void)
     kpinsert("\033[D", KEY_LEFT, 1);
 
     /*
-     * DEC vt52 mode.
+     * DEC vt52 cursor keys were ESC A/B/C/D.  Kitty and every
+     * other current terminal uses CSI / SS3.  Keep ESC B free
+     * for Alt-B (bold).
      */
-    kpinsert("\033A", KEY_UP, 1);
-    kpinsert("\033B", KEY_DOWN, 1);
-    kpinsert("\033C", KEY_RIGHT, 1);
-    kpinsert("\033D", KEY_LEFT, 1);
 
     /*
      * DEC vt52 application keys, and some Zenith 19.
@@ -1060,6 +1134,11 @@ setup_dflt_esc_seq(void)
      * Fake a control character.
      */
     kpinsert("\033\033", KEY_DOUBLE_ESC, 1);
+
+    kpinsert("\033[200~", KEY_PASTE_START, 1);
+    kpinsert("\033[201~", KEY_PASTE_END, 1);
+    kpinsert("\033]", KEY_OSC, 1);
+    setup_html_esc_seq();
 }
 
 
@@ -1321,7 +1400,10 @@ tcapopen(void)
      */
     if(gmode&MDFKEY && Pmaster == NULL)
       puts("\033[99h");
-    
+
+    term_bracketed_paste(1);
+    term_keyboard_proto(1);
+
     /* return ignored */
     return(0);
 }
@@ -1331,6 +1413,9 @@ static int
 tcapclose(void)
 {
     if(!Pmaster){
+	term_keyboard_proto(0);
+	term_bracketed_paste(0);
+
 	if(gmode&MDFKEY)
 	  puts("\033[99l");		/* reset UW-NCSA telnet keys */
 
@@ -1758,6 +1843,23 @@ unsigned
 tthascap(void)
 {
     return(0);
+}
+
+void
+term_bracketed_paste(int on)
+{
+    (void) on;
+}
+
+void
+term_keyboard_proto(int on)
+{
+    (void) on;
+}
+
+void
+setup_html_esc_seq(void)
+{
 }
 
 /*

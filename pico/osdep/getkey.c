@@ -14,6 +14,8 @@
 
 #include <system.h>
 #include <general.h>
+#include <ctype.h>
+#include <string.h>
 
 #include "../estruct.h"
 #include "../mode.h"
@@ -59,6 +61,8 @@ get_input_timeout(void)
 /* internal prototypes */
 void		bail(void);
 int		ReadyForKey(int);
+static int	key_to_meta_letter(int);
+static int	option_glyph_to_letter(int);
 
 
 
@@ -67,6 +71,112 @@ bail(void)
 {
     sleep(30);				/* see if os receives SIGHUP */
     kill(getpid(), SIGHUP);			/* eof or bad error */
+}
+
+
+#define	PASTE_MAX	8192
+
+static UCS paste_q[PASTE_MAX];
+static int paste_n = 0;
+static int paste_i = 0;
+static int paste_fresh = 0;
+
+
+int
+pico_paste_is_fresh(void)
+{
+    return(paste_fresh && paste_n > 0);
+}
+
+
+void
+pico_paste_clear_fresh(void)
+{
+    paste_fresh = 0;
+}
+
+
+UCS *
+pico_paste_ucs4(int *np)
+{
+    if(np)
+      *np = paste_n;
+
+    return(paste_n > 0 ? paste_q : NULL);
+}
+
+
+void
+pico_paste_discard(void)
+{
+    paste_n = paste_i = 0;
+    paste_fresh = 0;
+}
+
+
+int
+pico_paste_queued(void)
+{
+    return(paste_i < paste_n);
+}
+
+
+UCS
+pico_paste_take(void)
+{
+    UCS c;
+
+    if(paste_i >= paste_n)
+      return(0);
+
+    c = paste_q[paste_i++];
+    if(c == '\r'){
+	if(paste_i < paste_n && paste_q[paste_i] == '\n')
+	  paste_i++;
+
+	return(CTRL | 'M');
+    }
+
+    if(c == '\n')
+      return(CTRL | 'M');
+
+    if(c >= 0x00 && c <= 0x1F)
+      return(CTRL | (c + '@'));
+
+    return(c);
+}
+
+
+int
+pico_paste_collect(int (*getcfunc)(int (*)(int), void (*)(void)),
+		   int (*recorder)(int), void (*bail_handler)(void),
+		   void *data)
+{
+    UCS ch, status;
+
+    paste_n = paste_i = 0;
+    paste_fresh = 0;
+
+    while(paste_n < PASTE_MAX - 1){
+	if(!ReadyForKey(1))
+	  break;
+
+	status = kbseq(getcfunc, recorder, bail_handler, data, &ch);
+	if(status == KEY_PASTE_END)
+	  break;
+
+	if(status == KEY_PASTE_START)
+	  continue;
+
+	if(status == 0 && ch)
+	  paste_q[paste_n++] = ch;
+	else
+	  break;
+    }
+
+    paste_q[paste_n] = 0;
+    paste_fresh = (paste_n > 0);
+    return(paste_n);
 }
 
 
@@ -127,10 +237,26 @@ GetKey(void)
 {
     UCS ch, status, cc;
 
+    if(pico_paste_queued())
+      return(pico_paste_take());
+
     if(!ReadyForKey(FUDGE-5))
       return(NODATA);
 
     switch(status = kbseq(simple_ttgetc, NULL, bail, input_cs, &ch)){
+      case KEY_PASTE_START:
+	pico_paste_collect(simple_ttgetc, NULL, bail, input_cs);
+	if(pico_paste_queued())
+	  return(pico_paste_take());
+
+	return(NODATA);
+
+      case KEY_PASTE_END:
+	return(NODATA);
+
+      case NODATA:			/* kitty key-release, etc. */
+	return(NODATA);
+
       case 0: 	/* regular character */
 	break;
 
@@ -304,17 +430,58 @@ GetKey(void)
 	ch = NODATA;
 	break;
 
+      case KEY_OSC:
+	{
+	    int prev = 0;
+
+	    for(;;){
+		if(!ReadyForKey(2))
+		  break;
+
+		ch = (*term.t_getchar)(NODATA, NULL, bail);
+		if(ch == '\007')
+		  break;
+
+		if(prev == '\033' && ch == '\\')
+		  break;
+
+		prev = ch;
+	    }
+	}
+
+	return(NODATA);
+
       case BADESC:
 	(*term.t_beep)();
 	return(status);
 
-      default:				/* punt the whole thing	*/
+      default:
+	/*
+	 * Kitty keyboard protocol / modifyOtherKeys deliver Ctrl+letter
+	 * as CSI u (CTRL|'C', CTRL|'O', ...) rather than a C0 byte.
+	 * Those must run the composer bindings, not beep.
+	 */
+	if(status & (META | CTRL))
+	  return(status);
+
 	(*term.t_beep)();
-	break;
+	return(BADESC);
     }
 
     if (ch >= 0x00 && ch <= 0x1F)       /* C0 control -> C-     */
       ch = CTRL | (ch+'@');
+
+    {
+	/*
+	 * Only Option-composed glyphs (∫, ç, ø, ...) become Alt+letter.
+	 * ASCII a-z here is ordinary typing — mapping those to META
+	 * turned every "o"/"c" into numbered-list / code markup.
+	 */
+	int letter = option_glyph_to_letter((int) ch);
+
+	if(letter)
+	  return(META | letter);
+    }
 
     return(ch);
 }
@@ -336,6 +503,270 @@ GetKey(void)
  *           The escaped function.
  *           0 if a regular char with char stuffed in location c.
  */
+#define KB_SEQMAX 64
+
+static int
+kb_csi_final(unsigned char c)
+{
+    return(c >= 0x40 && c <= 0x7e);
+}
+
+
+/*
+ * macOS Option+letter glyphs (US layout).  Not Shift, not ASCII.
+ */
+static int
+option_glyph_to_letter(int key)
+{
+    switch(key){
+      case 0x222B:			/* ∫  option+b */
+	return('b');
+      case 0x02C6:			/* ˆ  option+i */
+	return('i');
+      case 0x00A8:			/* ¨  option+u */
+	return('u');
+      case 0x00DF:			/* ß  option+s */
+	return('s');
+      case 0x00E7:			/* ç  option+c */
+	return('c');
+      case 0x02D9:			/* ˙  option+h */
+	return('h');
+      case 0x0153:			/* œ  option+q */
+	return('q');
+      case 0x03C0:			/* π  option+p */
+	return('p');
+      case 0x00AE:			/* ®  option+r */
+	return('r');
+      case 0x00AC:			/* ¬  option+l */
+	return('l');
+      case 0x00F8:			/* ø  option+o */
+	return('o');
+      case 0x02DA:			/* ˚  option+k */
+	return('k');
+      default:
+	return(0);
+    }
+}
+
+
+/*
+ * Map a keycap or macOS Option-composed character to a markup letter.
+ * ASCII a-z is for CSI u / modifyOtherKeys, not for unmodded typing.
+ */
+static int
+key_to_meta_letter(int key)
+{
+    int glyph;
+
+    if(key >= 'A' && key <= 'Z')
+      key = key - 'A' + 'a';
+
+    if(key >= 'a' && key <= 'z')
+      return(key);
+
+    glyph = option_glyph_to_letter(key);
+    return(glyph);
+}
+
+
+static int
+kb_parse_int(char **pp, char *end)
+{
+    char *p = *pp;
+    int   v = 0, got = 0;
+
+    while(p < end && *p >= '0' && *p <= '9'){
+	v = v * 10 + (*p - '0');
+	p++;
+	got = 1;
+    }
+
+    *pp = p;
+    return(got ? v : -1);
+}
+
+
+static UCS
+kb_map_mod_key(int key, int mod, UCS *ch)
+{
+    int bits, alt, ctrl, letter;
+
+    if(mod < 1)
+      mod = 1;
+
+    bits = mod - 1;
+    alt = bits & 2;
+    ctrl = bits & 4;
+    letter = key_to_meta_letter(key);
+
+    if(alt && letter)
+      return(META | letter);
+
+    if(ctrl){
+	if(letter)
+	  return(CTRL | (letter - 'a' + 'A'));
+
+	/* CSI u sometimes reports Ctrl+C as key 3 rather than 99 */
+	if(key >= 1 && key <= 26)
+	  return(CTRL | ('A' + key - 1));
+
+	if(key >= 32 && key < 127)
+	  return(CTRL | ((key >= 'a' && key <= 'z')
+			 ? (key - 'a' + 'A') : key));
+    }
+
+    if(alt || ctrl)
+      return(BADESC);
+
+    if(key == 27){
+	*ch = 27;
+	return(0);
+    }
+
+    if(key == 13){
+	*ch = '\r';
+	return(0);
+    }
+
+    if(key == 9){
+	*ch = '\t';
+	return(0);
+    }
+
+    if(key == 127 || key == 8)
+      return(0x7F);
+
+    if(key >= 32 && key < 127){
+	*ch = (UCS) key;
+	return(0);
+    }
+
+    if(letter)
+      return(META | letter);
+
+    return(BADESC);
+}
+
+
+/*
+ * Kitty keyboard protocol: CSI key:shifted:base ; mods:event ; text u
+ * xterm modifyOtherKeys:   CSI 27 ; mods ; key ~
+ *
+ * On macOS, Option+b may show up as key 98 (b), as ∫ (U+222B), or as
+ * 98 with ∫ in the associated-text field.  Any of those is Alt+b.
+ */
+static UCS
+kb_decode_csi(unsigned char *seq, int n, UCS *ch)
+{
+    char *p, *end;
+    int   keys[4], nk = 0, mod = 1, ev = 1, text = 0, final;
+    int   i, letter, key;
+
+    if(n < 3 || seq[0] != '\033' || seq[1] != '[')
+      return(BADESC);
+
+    final = seq[n - 1];
+    p = (char *) seq + 2;
+    end = (char *) seq + n - 1;
+
+    memset(keys, 0, sizeof(keys));
+    while(nk < 4 && p < end){
+	int v = kb_parse_int(&p, end);
+
+	if(v >= 0)
+	  keys[nk++] = v;
+	if(p < end && *p == ':'){
+	    p++;
+	    continue;
+	}
+
+	break;
+    }
+
+    if(p < end && *p == ';'){
+	p++;
+	mod = kb_parse_int(&p, end);
+	if(mod < 0)
+	  mod = 1;
+	if(p < end && *p == ':'){
+	    p++;
+	    ev = kb_parse_int(&p, end);
+	    if(ev < 0)
+	      ev = 1;
+	    while(p < end && *p == ':'){
+		p++;
+		(void) kb_parse_int(&p, end);
+	    }
+	}
+    }
+
+    if(p < end && *p == ';'){
+	p++;
+	text = kb_parse_int(&p, end);
+	if(text < 0)
+	  text = 0;
+    }
+
+    if(ev == 3)				/* key-release */
+      return(NODATA);
+
+    if(final == '~' && keys[0] == 27){
+	/* CSI 27 ; mod ; key ~  — key is in the third field (text here) */
+	return(kb_map_mod_key(text, mod, ch));
+    }
+
+    if(final != 'u')
+      return(BADESC);
+
+    letter = 0;
+    for(i = 0; i < nk && !letter; i++)
+      letter = key_to_meta_letter(keys[i]);
+
+    if(!letter && text)
+      letter = key_to_meta_letter(text);
+
+    key = (nk > 0) ? keys[0] : 0;
+    if(letter)
+      key = letter;
+
+    return(kb_map_mod_key(key, mod, ch));
+}
+
+
+static UCS
+kb_finish_csi(unsigned char *seen, int *nseen,
+	      int (*getcfunc)(int (*recorder)(int), void (*bail_handler)(void)),
+	      int (*recorder)(int),
+	      void (*bail_handler)(void),
+	      UCS *ch)
+{
+    if(*nseen == 2 && seen[0] == '\033' && seen[1] >= 'A' && seen[1] <= 'z'){
+	int letter = seen[1];
+
+	/* SS3 / CSI prefixes are not Alt+O / Alt+[ */
+	if(letter == 'O' || letter == '[')
+	  return(BADESC);
+
+	if(letter >= 'A' && letter <= 'Z')
+	  letter = letter - 'A' + 'a';
+
+	if(letter >= 'a' && letter <= 'z')
+	  return(META | letter);
+    }
+
+    if(*nseen < 2 || seen[0] != '\033' || seen[1] != '[')
+      return(BADESC);
+
+    while(*nseen < KB_SEQMAX - 1 && !kb_csi_final(seen[*nseen - 1]))
+      seen[(*nseen)++] = (unsigned char) (*getcfunc)(recorder, bail_handler);
+
+    if(!kb_csi_final(seen[*nseen - 1]))
+      return(BADESC);
+
+    return(kb_decode_csi(seen, *nseen, ch));
+}
+
+
 UCS
 kbseq(int (*getcfunc)(int (*recorder)(int ), void (*bail_handler)(void )),
       int (*recorder)(int),
@@ -343,8 +774,8 @@ kbseq(int (*getcfunc)(int (*recorder)(int ), void (*bail_handler)(void )),
       void *data,
       UCS *ch)
 {
-    unsigned char c;
-    int      first = 1;
+    unsigned char c, seen[KB_SEQMAX];
+    int      first = 1, nseen = 0;
     KBESC_T *current;
 
     current = kbesc;
@@ -353,6 +784,8 @@ kbseq(int (*getcfunc)(int (*recorder)(int ), void (*bail_handler)(void )),
 
     while(1){
 	c = (*getcfunc)(recorder, bail_handler);
+	if(nseen < KB_SEQMAX - 1)
+	  seen[nseen++] = c;
 
 	while(current->value != c){
 	    if(current->left == NULL){		/* NO MATCH */
@@ -401,7 +834,8 @@ kbseq(int (*getcfunc)(int (*recorder)(int ), void (*bail_handler)(void )),
 		    return(0);
 		}
 		else
-		  return(BADESC);
+		  return(kb_finish_csi(seen, &nseen, getcfunc, recorder,
+				       bail_handler, ch));
 	    }
 	    current = current->left;
 	}
@@ -517,6 +951,57 @@ kbdestroy(KBESC_T *kb)
 }
 
 #else /* _WINDOWS */
+
+int
+pico_paste_is_fresh(void)
+{
+    return(0);
+}
+
+void
+pico_paste_clear_fresh(void)
+{
+}
+
+UCS *
+pico_paste_ucs4(int *np)
+{
+    if(np)
+      *np = 0;
+
+    return(NULL);
+}
+
+void
+pico_paste_discard(void)
+{
+}
+
+int
+pico_paste_queued(void)
+{
+    return(0);
+}
+
+UCS
+pico_paste_take(void)
+{
+    return(0);
+}
+
+int
+pico_paste_collect(int (*getcfunc)(int (*)(int), void (*)(void)),
+		   int (*recorder)(int), void (*bail_handler)(void),
+		   void *data)
+{
+    (void) getcfunc;
+    (void) recorder;
+    (void) bail_handler;
+    (void) data;
+    return(0);
+}
+
+
 
 /*
  * Read in a key.

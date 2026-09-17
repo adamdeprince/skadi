@@ -42,6 +42,9 @@
 
 /* exported prototypes */
 unsigned tthascap(void);
+void	 term_bracketed_paste(int);
+void	 term_keyboard_proto(int);
+void	 setup_html_esc_seq(void);
 #if	HAS_TERMINFO || HAS_TERMCAP
 void	 putpad(char *);
 #endif

@@ -40,6 +40,7 @@
 
 #include "termout.gen.h"
 #include "termout.unx.h"
+#include "../../pico/osdep/terminal.h"
 
 
 /*======================================================================
@@ -205,6 +206,9 @@ init_screen(void)
     if(_termcap_init)			/* init using termcap's rule */
       tputs(_termcap_init, 1, outchar);
 
+    term_bracketed_paste(1);
+    term_keyboard_proto(1);
+
     /* and make sure there are no scrolling surprises! */
     BeginScroll(0, ps_global->ttyo->screen_rows - 1);
 
@@ -327,6 +331,9 @@ end_screen(char *message, int exit_val)
     /* unset colors */
     if(pico_usingcolor())
       pico_endcolor();
+
+    term_keyboard_proto(0);
+    term_bracketed_paste(0);
 
     if(_termcap_end != NULL)
       tputs(_termcap_end, 1, outchar);
