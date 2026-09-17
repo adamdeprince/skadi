@@ -127,6 +127,8 @@ extern	void HeaderPaintCursor(void);
 extern	void PaintBody(int);
 extern	int AppendAttachment(char *, char *, char *, int);
 extern	int pico_next_attach_tmp;
+extern	char *pico_next_attach_name;
+extern	void pico_free_fetched(PICO_FETCHED **);
 extern	int pico_consume_paste_if_attach(void);
 
 /* display.c */

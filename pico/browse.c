@@ -1641,6 +1641,7 @@ FileBrowse(char *dir, size_t dirlen, char *fn, size_t fnlen,
 		      strncpy(new->size, gmp->current->size, sizeof(new->size));
 		      new->size[sizeof(new->size)-1] = '\0';
 		      new->is_tmp = 0;
+		      new->dispname = NULL;
 		      new->next = NULL;
 		      *lmreturn = new;
 		  }
@@ -2086,6 +2087,7 @@ add_cell_to_lmlist(struct fcell *cell, struct bmaster *mp)
 	}
 
 	new->is_tmp = 0;
+		      new->dispname = NULL;
 	new->next = mp->lm;
 	mp->lm = new;
     }
@@ -2892,6 +2894,7 @@ FileBrowse(char *dir, size_t dirlen, char *fn, size_t fnlen,
 		    strncpy(new->dir, dir ? dir : "", dlen);
 		    new->dir[dlen] = '\0';
 		    new->is_tmp = 0;
+		      new->dispname = NULL;
 
 		    /* build full path to stat file. */
 		    if((strlen(new->dir) + strlen(S_FILESEP) +
@@ -3013,6 +3016,9 @@ zotlmlist(LMLIST *lm)
 
 	if(lm->dir)
 	  free(lm->dir);
+
+	if(lm->dispname)
+	  free(lm->dispname);
 
 	tp = lm;
 	lm = lm->next;
