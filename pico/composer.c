@@ -822,7 +822,7 @@ HeaderEditor(int f, int n)
 
 		    (void) QuoteAttach(bfp, space);
 
-		    (void) AppendAttachment(bfp, lm->size, cmt);
+		    (void) AppendAttachment(bfp, lm->size, cmt, lmp->is_tmp);
 
 		    if(bfp != buf)
 		      free(bfp);
@@ -1800,7 +1800,7 @@ header_upline(int gripe)
  * 
  */
 int
-AppendAttachment(char *fn, char *sz, char *cmt)
+AppendAttachment(char *fn, char *sz, char *cmt, int tmp)
 {
     int	 a_e, status, spaces;
     struct hdr_line *lp;
@@ -1851,6 +1851,7 @@ AppendAttachment(char *fn, char *sz, char *cmt)
     }
 
     /* validate the new attachment, and reformat if needed */
+    pico_next_attach_tmp = tmp;
     if((status = SyncAttach()) != 0){
 	EML eml;
 
@@ -1862,10 +1863,13 @@ AppendAttachment(char *fn, char *sz, char *cmt)
 	if(FormatLines(headents[a_e].hd_text, "",
 		       term.t_ncol - headents[a_e].prwid,
 		       headents[a_e].break_on_comma, 0) == -1){
+	    pico_next_attach_tmp = 0;
 	    emlwwrite(_("Format lines failed!"), NULL);
 	    return(0);
 	}
     }
+
+    pico_next_attach_tmp = 0;
 
     UpdateHeader(0);
     PaintHeader(COMPOSER_TOP_LINE, status != 0);
@@ -1942,6 +1946,9 @@ LineEdit(int allowedit, UCS *lastch)
 #endif
 
 	ch = GetKey();
+
+	if(pico_consume_paste_if_attach())
+	  continue;
 	
 	if (term.t_nrow < 6 && ch != NODATA){
 	    (*term.t_beep)();

@@ -339,6 +339,7 @@ typedef struct lmlist {
 	char *dir;			/* these 3 are all UTF-8 strings */
 	char *fname;
 	char  size[32];
+	unsigned is_tmp:1;		/* fname is a temp file we created */
 	struct lmlist *next;
 }	LMLIST;
 

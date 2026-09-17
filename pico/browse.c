@@ -1640,6 +1640,7 @@ FileBrowse(char *dir, size_t dirlen, char *fn, size_t fnlen,
 		      new->dir[dlen] = '\0';
 		      strncpy(new->size, gmp->current->size, sizeof(new->size));
 		      new->size[sizeof(new->size)-1] = '\0';
+		      new->is_tmp = 0;
 		      new->next = NULL;
 		      *lmreturn = new;
 		  }
@@ -2084,6 +2085,7 @@ add_cell_to_lmlist(struct fcell *cell, struct bmaster *mp)
 	    new->size[sizeof(new->size)-1] = '\0';
 	}
 
+	new->is_tmp = 0;
 	new->next = mp->lm;
 	mp->lm = new;
     }
@@ -2889,6 +2891,7 @@ FileBrowse(char *dir, size_t dirlen, char *fn, size_t fnlen,
 		    new->fname[flen] = '\0';
 		    strncpy(new->dir, dir ? dir : "", dlen);
 		    new->dir[dlen] = '\0';
+		    new->is_tmp = 0;
 
 		    /* build full path to stat file. */
 		    if((strlen(new->dir) + strlen(S_FILESEP) +

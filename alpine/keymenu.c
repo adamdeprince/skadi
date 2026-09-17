@@ -798,7 +798,7 @@ struct key att_index_keys[] =
 	OTHER_MENU,
 	HDRMODE_MENU,
 	{"X",N_("eXternal"),{MC_EXTERNAL,1,{'x'}},KS_NONE},
-	NULL_MENU,
+	{"L",N_("Download"),{MC_DOWNLOAD,1,{'l'}},KS_NONE},
 	NULL_MENU,
 	NULL_MENU,
 	NULL_MENU,
@@ -844,7 +844,7 @@ struct key att_view_keys[] =
 	OTHER_MENU,
 	HOMEKEY_MENU,
 	ENDKEY_MENU,
-	NULL_MENU,
+	{"L",N_("Download"),{MC_DOWNLOAD,1,{'l'}},KS_NONE},
 	NULL_MENU,
 #ifdef SMIME
 	{"^D","Decrypt", {MC_DECRYPT,1,{ctrl('d')}},KS_NONE},

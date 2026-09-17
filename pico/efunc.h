@@ -113,7 +113,9 @@ extern	void restore_pico_state(VARS_TO_SAVE *);
 extern	void free_pico_state(VARS_TO_SAVE *);
 extern	void HeaderPaintCursor(void);
 extern	void PaintBody(int);
-extern	int AppendAttachment(char *, char *, char *);
+extern	int AppendAttachment(char *, char *, char *, int);
+extern	int pico_next_attach_tmp;
+extern	int pico_consume_paste_if_attach(void);
 
 /* display.c */
 extern	int vtinit(void);

@@ -60,6 +60,7 @@
 #include "../pith/send.h"
 #include "../pith/smime.h"
 #include "../pith/offcache.h"
+#include "../pith/goblindl.h"
 
 
 typedef struct body_particulars {
@@ -97,6 +98,7 @@ void	   new_thread_on_blank_subject(void);
 char      *choose_a_priority(char *);
 int        dont_flow_this_time(void);
 int	   mime_type_for_pico(char *);
+int	   term_fetch_for_pico(char *, char *, size_t, long *);
 char      *cancel_for_pico(void (*)(void));
 int	   filter_message_text(char *, ENVELOPE *, BODY *, STORE_S **, METAENV *);
 void	   pine_send_newsgroup_name(char *, char*, size_t);
@@ -1883,10 +1885,12 @@ pine_send(ENVELOPE *outgoing, struct mail_bodystruct **body,
     }
 
     pbf->upload        = NULL;
+    pbf->term_fetch    = NULL;
 #else
     pbf->upload        = (ps_global->VAR_UPLOAD_CMD
 			  && ps_global->VAR_UPLOAD_CMD[0])
 			  ? upload_msg_to_pico : NULL;
+    pbf->term_fetch    = kitty_xfer_available() ? term_fetch_for_pico : NULL;
 #endif
 
     pbf->msgntext      = message_format_for_pico;
@@ -5240,6 +5244,37 @@ mime_type_for_pico(char *file)
 
   Returns: TRUE on success, FALSE otherwise
 ----*/
+int
+term_fetch_for_pico(char *path, char *dst, size_t dstlen, long int *nbytes)
+{
+    char *out = NULL;
+    long  n = 0;
+    int   rv;
+
+    if(nbytes)
+      *nbytes = 0;
+
+    if(!path || !dst || dstlen < 2)
+      return(0);
+
+    dst[0] = '\0';
+    rv = kitty_xfer_receive(path, &out, &n);
+    if(rv == GOBLIN_DL_CANCEL)
+      return(-1);
+
+    if(rv != GOBLIN_DL_OK || !out)
+      return(0);
+
+    strncpy(dst, out, dstlen - 1);
+    dst[dstlen - 1] = '\0';
+    if(nbytes)
+      *nbytes = n;
+
+    fs_give((void **) &out);
+    return(1);
+}
+
+
 int
 upload_msg_to_pico(char *fname, size_t fnlen, long int *size)
 {

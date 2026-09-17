@@ -66,6 +66,7 @@
 #include "../pith/ical.h"
 #include "../pith/body.h"
 #include "../pith/init.h"
+#include "../pith/goblindl.h"
 
 /*
  * Information used to paint and maintain a line on the attachment
@@ -121,6 +122,8 @@ int	    init_att_progress(char *, MAILSTREAM *, BODY *);
 long	    save_att_piped(int);
 int	    save_att_percent(void);
 void	    save_attachment(int, long, ATTACH_S *);
+void	    save_attachment_on_host(int, long, ATTACH_S *);
+void	    download_attachment(int, long, ATTACH_S *);
 void	    export_attachment(int, long, ATTACH_S *);
 char	   *write_attached_msg(long, ATTACH_S **, STORE_S *, int);
 void	    save_msg_att(long, ATTACH_S *);
@@ -867,6 +870,11 @@ attachment_screen(struct pine *ps)
 	    ps->mangled_footer = 1;
 	    break;
 
+	  case MC_DOWNLOAD :
+	    download_attachment(-FOOTER_ROWS(ps), msgno, current->attp);
+	    ps->mangled_footer = 1;
+	    break;
+
 	  case MC_PRINTMSG :			/* Save command */
 	    print_attachment(-FOOTER_ROWS(ps), msgno, current->attp);
 	    ps->mangled_footer = 1;
@@ -1248,15 +1256,133 @@ save_att_percent(void)
 
   Result: 
   ----*/
+static int xfer_last = -1;
+
+
+int
+alpine_xfer_where(char *what, int qline)
+{
+    int rv, def;
+    char prompt[128];
+    static ESCKEY_S where[] = {
+	{'c', 'c', "C", N_("Client")},
+	{'h', 'h', "H", N_("Host")},
+	{-1, 0, NULL, NULL}
+    };
+
+    if(xfer_last == XFER_CLIENT || xfer_last == XFER_HOST)
+      def = (xfer_last == XFER_CLIENT) ? 'c' : 'h';
+    else
+      def = kitty_xfer_available() ? 'c' : 'h';
+
+    snprintf(prompt, sizeof(prompt), _("%s to Client or Host? "),
+	     what ? what : _("Send"));
+    prompt[sizeof(prompt)-1] = '\0';
+
+    rv = radio_buttons(prompt, qline, where, def, 'x', NO_HELP, RB_NORM);
+    if(rv == 'x' || rv < 0)
+      return(XFER_CANCEL);
+
+    if(rv == 'c'){
+	xfer_last = XFER_CLIENT;
+	return(XFER_CLIENT);
+    }
+
+    xfer_last = XFER_HOST;
+    return(XFER_HOST);
+}
+
+
+void
+download_attachment(int qline, long int msgno, ATTACH_S *a)
+{
+    int rv;
+
+    if(ps_global->restricted){
+	q_status_message(SM_ORDER | SM_DING, 0, 4,
+			 "Alpine demo can't download attachments");
+	return;
+    }
+
+    if(!(a && a->number))
+      return;
+
+    rv = alpine_xfer_where(_("Download"), qline);
+    if(rv == XFER_CANCEL){
+	cmd_cancelled(_("Download"));
+	return;
+    }
+
+    if(rv == XFER_HOST){
+	save_attachment_on_host(qline, msgno, a);
+	return;
+    }
+
+    rv = kitty_xfer_send_attachment(msgno, a);
+    switch(rv){
+      case GOBLIN_DL_OK :
+	q_status_message1(SM_ORDER, 0, 4,
+			  _("Part %s sent to the client via kitty"),
+			  a->number);
+	break;
+
+      case GOBLIN_DL_CANCEL :
+	cmd_cancelled(_("Download"));
+	break;
+
+      case GOBLIN_DL_UNSUPPORTED :
+	q_status_message(SM_ORDER | SM_DING, 0, 4,
+			 _("Client download needs kitty file transfer"));
+	break;
+
+      default :
+	q_status_message1(SM_ORDER | SM_DING, 3, 4,
+			  _("Download of part %s failed"), a->number);
+	break;
+    }
+}
+
+
 void
 save_attachment(int qline, long int msgno, ATTACH_S *a)
 {
+    int where;
+
     if(ps_global->restricted){
         q_status_message(SM_ORDER | SM_DING, 0, 4,
 			 "Alpine demo can't save attachments");
         return;
     }
 
+    where = alpine_xfer_where(_("Save"), qline);
+    if(where == XFER_CANCEL){
+	cmd_cancelled(_("Save"));
+	return;
+    }
+
+    if(where == XFER_CLIENT){
+	int rv = kitty_xfer_send_attachment(msgno, a);
+
+	if(rv == GOBLIN_DL_OK)
+	  q_status_message1(SM_ORDER, 0, 4,
+			    _("Part %s sent to the client via kitty"),
+			    a->number);
+	else if(rv == GOBLIN_DL_CANCEL)
+	  cmd_cancelled(_("Save"));
+	else
+	  q_status_message(SM_ORDER | SM_DING, 0, 3,
+			   _("Client save needs kitty file transfer"));
+
+	return;
+    }
+
+    save_attachment_on_host(qline, msgno, a);
+}
+
+
+void
+save_attachment_on_host(int qline, long int msgno, ATTACH_S *a)
+{
     if(MIME_MSG_A(a))
       save_msg_att(msgno, a);
     else if(MIME_DGST_A(a))
@@ -1278,10 +1404,34 @@ save_attachment(int qline, long int msgno, ATTACH_S *a)
 void
 export_attachment(int qline, long int msgno, ATTACH_S *a)
 {
+    int where;
+
     if(ps_global->restricted){
         q_status_message(SM_ORDER | SM_DING, 0, 4,
 			 "Alpine demo can't export attachments");
         return;
+    }
+
+    where = alpine_xfer_where(_("Export"), qline);
+    if(where == XFER_CANCEL){
+	cmd_cancelled(_("Export"));
+	return;
+    }
+
+    if(where == XFER_CLIENT){
+	int rv = kitty_xfer_send_attachment(msgno, a);
+
+	if(rv == GOBLIN_DL_OK)
+	  q_status_message1(SM_ORDER, 0, 4,
+			    _("Part %s sent to the client via kitty"),
+			    a->number);
+	else if(rv == GOBLIN_DL_CANCEL)
+	  cmd_cancelled(_("Export"));
+	else
+	  q_status_message(SM_ORDER | SM_DING, 0, 3,
+			   _("Client export needs kitty file transfer"));
+
+	return;
     }
 
     if(MIME_MSG_A(a))
@@ -1905,11 +2055,34 @@ void
 print_attachment(int qline, long int msgno, ATTACH_S *a)
 {
     char prompt[250];
+    int where;
 
     if(ps_global->restricted){
         q_status_message(SM_ORDER | SM_DING, 0, 4,
 			 "Alpine demo can't Print attachments");
         return;
+    }
+
+    where = alpine_xfer_where(_("Print"), qline);
+    if(where == XFER_CANCEL){
+	cmd_cancelled(_("Print"));
+	return;
+    }
+
+    if(where == XFER_CLIENT){
+	int rv = kitty_xfer_send_attachment(msgno, a);
+
+	if(rv == GOBLIN_DL_OK)
+	  q_status_message1(SM_ORDER, 0, 4,
+			    _("Part %s sent to the client via kitty"),
+			    a->number);
+	else if(rv == GOBLIN_DL_CANCEL)
+	  cmd_cancelled(_("Print"));
+	else
+	  q_status_message(SM_ORDER | SM_DING, 0, 3,
+			   _("Client print needs kitty file transfer"));
+
+	return;
     }
 
     snprintf(prompt, sizeof(prompt), "attach%s %s",
@@ -2790,6 +2963,11 @@ process_attachment_cmd(int cmd, MSGNO_S *msgmap, SCROLL_S *sparms)
 
       case MC_SAVE :
 	save_attachment(-FOOTER_ROWS(ps_global), rawno, sparms->proc.data.p);
+	ps_global->mangled_footer = 1;
+	break;
+
+      case MC_DOWNLOAD :
+	download_attachment(-FOOTER_ROWS(ps_global), rawno, sparms->proc.data.p);
 	ps_global->mangled_footer = 1;
 	break;
 

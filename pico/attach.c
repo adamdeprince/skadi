@@ -30,9 +30,18 @@ void   ZotAttach(struct pico_atmt *);
 void   sinserts(UCS *, int, UCS *, int);
 int    AttachUpload(char *, size_t, char *, size_t);
 int    AttachCancel(char *);
+int    pico_hexval(int);
+void   pico_pct_decode(char *);
+int    pico_looks_like_path(char *);
+int    pico_normalize_pasted_path(char *, char *, size_t);
+int    pico_pasted_path_file(char *, char *, size_t);
+int    pico_kitty_path(char *, char *, size_t);
+int    pico_resolve_attach_path(char *, char *, size_t, int *);
 
 
 #define	HIBIT_WARN	"Only ASCII characters allowed in attachment comments"
+
+int pico_next_attach_tmp = 0;
 
 
 /*
@@ -42,7 +51,7 @@ int    AttachCancel(char *);
 int
 AskAttach(char *cmnt, size_t cmntlen, LMLIST **lm)
 {
-    int	    i, status, fbrv, upload = 0;
+    int	    i, status, fbrv, upload = 0, from_client = 0;
     int     fb_flags = FB_READ | FB_ATTACH;
     off_t   attsz = 0;
     size_t  len;
@@ -62,14 +71,26 @@ AskAttach(char *cmnt, size_t cmntlen, LMLIST **lm)
 	    int	      n;
 
 	    memset(&menu_attach, 0, 10*sizeof(EXTRAKEYS));
-	    menu_attach[n = 0].name  = "^T";
-	    menu_attach[n].label     = N_("To Files");
-	    menu_attach[n].key	     = (CTRL|'T');
+	    n = -1;
 
-	    if(gmode & MDCMPLT){
-		menu_attach[++n].name = "TAB";
-		menu_attach[n].label  = N_("Complete");
-		menu_attach[n].key    = (CTRL|'I');
+	    if(!from_client){
+		menu_attach[++n].name  = "^T";
+		menu_attach[n].label     = N_("To Files");
+		menu_attach[n].key	     = (CTRL|'T');
+
+		if(gmode & MDCMPLT){
+		    menu_attach[++n].name = "TAB";
+		    menu_attach[n].label  = N_("Complete");
+		    menu_attach[n].key    = (CTRL|'I');
+		}
+	    }
+
+	    if(Pmaster && Pmaster->term_fetch){
+		menu_attach[++n].name  = "^K";
+		menu_attach[n].key     = (CTRL|'K');
+		menu_attach[n].label   = from_client
+					  ? N_("From Host")
+					  : N_("From Client");
 	    }
 
 #if	!defined(DOS) && !defined(MAC)
@@ -92,10 +113,11 @@ AskAttach(char *cmnt, size_t cmntlen, LMLIST **lm)
 
 	    menu_attach[++n].name  = NULL;
 	    KS_OSDATASET(&menu_attach[0], KS_NONE);
-	    status = mlreply_utf8(upload ? _("Name to give uploaded attachment: ")
-			    /* TRANSLATORS: User is being asked for the name
-			       of the file they want to attach to a message. */
-				    : _("File to attach: "),
+	    status = mlreply_utf8(upload
+				    ? _("Name to give uploaded attachment: ")
+				    : (from_client
+				       ? _("Client file to attach: ")
+				       : _("File to attach: ")),
 			     fn, sizeof(fn), QNORML, menu_attach);
 	}
 	else
@@ -128,7 +150,7 @@ AskAttach(char *cmnt, size_t cmntlen, LMLIST **lm)
 	    break;
 
 	  case (CTRL|'I') :
-	    if(i == 2){
+	    if(i == 2 && !from_client){
 		char *fname, *p;
 		int   dirlen;
 	       
@@ -186,7 +208,7 @@ AskAttach(char *cmnt, size_t cmntlen, LMLIST **lm)
 	    break;
 
 	  case (CTRL|'T'):
-	    if(i != 2){
+	    if(i != 2 || from_client){
 		(*term.t_beep)();
 		break;
 	    }
@@ -225,6 +247,7 @@ AskAttach(char *cmnt, size_t cmntlen, LMLIST **lm)
 		new->dir[len2] = '\0';
 		strncpy(new->size, sz, sizeof(new->size)-1);
 		new->size[sizeof(new->size)-1] = '\0';
+		new->is_tmp = 0;
 		new->next = NULL;
 		*lm = new;
 
@@ -275,10 +298,23 @@ AskAttach(char *cmnt, size_t cmntlen, LMLIST **lm)
 	    update();
 	    continue;
 
+	  case (CTRL|'K'):
+	    if(i == 2 && Pmaster && Pmaster->term_fetch){
+		from_client ^= 1;
+		upload = 0;
+	    }
+	    else
+	      (*term.t_beep)();
+
+	    break;
+
 #if	!defined(DOS) && !defined(MAC)
 	  case (CTRL|'Y'):			/* upload? */
-	    if(i == 2)
-	      upload ^= 1;			/* flip mode */
+	    if(i == 2){
+		upload ^= 1;			/* flip mode */
+		if(upload)
+		  from_client = 0;
+	    }
 	    else
 	      (*term.t_beep)();
 
@@ -312,7 +348,38 @@ AskAttach(char *cmnt, size_t cmntlen, LMLIST **lm)
 		    }
 
 		    if(fn[0]){
-			if((gmode & MDTREE)
+			int  is_tmp = 0;
+
+			if(from_client){
+			    char fetched[NLINE];
+			    long nbytes = 0;
+			    int  fr = 0;
+
+			    fetched[0] = '\0';
+			    if(!(Pmaster && Pmaster->term_fetch)){
+				emlwwrite(_("Client attach needs kitty"), NULL);
+				return(0);
+			    }
+
+			    fr = (*Pmaster->term_fetch)(fn, fetched,
+							sizeof(fetched),
+							&nbytes);
+			    if(fr == 1 && fetched[0]){
+				strncpy(fn, fetched, sizeof(fn)-1);
+				fn[sizeof(fn)-1] = '\0';
+				attsz = (off_t) nbytes;
+				is_tmp = 1;
+			    }
+			    else if(fr < 0){
+				emlwrite(_("Attach cancelled"), NULL);
+				return(0);
+			    }
+			    else{
+				emlwwrite(_("Can't fetch that client file"), NULL);
+				return(0);
+			    }
+			}
+			else if((gmode & MDTREE)
 			   && !compresspath(opertree, fn, sizeof(fn))){
 			    eml.s = (gmode&MDSCUR) ? _("home directory") : opertree;
 			    emlwrite(
@@ -329,11 +396,11 @@ AskAttach(char *cmnt, size_t cmntlen, LMLIST **lm)
 			_("Restricted mode allows attachments from %s only"), &eml);
 				return(0);
 			    }
-			}
 
-			if((status = fexist(fn, "r", &attsz)) != FIOSUC){
-			    fioperr(status, fn); /* file DOESN'T exist! */
-			    return(0);
+			    if((status = fexist(fn, "r", &attsz)) != FIOSUC){
+				fioperr(status, fn);
+				return(0);
+			    }
 			}
 
 			len = strlen(fn);
@@ -344,6 +411,7 @@ AskAttach(char *cmnt, size_t cmntlen, LMLIST **lm)
 			}
 
 			new->dir = NULL;
+			new->is_tmp = is_tmp ? 1 : 0;
 			strncpy(new->fname, fn, len);
 			new->fname[len] = '\0';
 			strncpy(new->size, prettysz(attsz), sizeof(new->size));
@@ -1317,6 +1385,9 @@ NewAttach(char *f, long l, char *c)
     strncpy(tp->description, c, len);
     tp->description[len] = '\0';
 
+    if(pico_next_attach_tmp)
+      tp->flags |= A_TMP;
+
     /* callback to show user the mime type that will be used for attachment */
     if(Pmaster->mimetype  && (*Pmaster->mimetype)(f) > 0){
 	int rv ;
@@ -1405,6 +1476,347 @@ ZotAttach(PATMT *p)
       free((char *)p->id);
 
     p->next = NULL;
+}
+
+
+int
+pico_hexval(int c)
+{
+    if(c >= '0' && c <= '9')
+      return(c - '0');
+
+    if(c >= 'a' && c <= 'f')
+      return(c - 'a' + 10);
+
+    if(c >= 'A' && c <= 'F')
+      return(c - 'A' + 10);
+
+    return(-1);
+}
+
+
+void
+pico_pct_decode(char *s)
+{
+    char *d;
+    int   hi, lo;
+
+    for(d = s; *s; s++){
+	if(*s == '%' && (hi = pico_hexval((unsigned char) s[1])) >= 0
+	   && (lo = pico_hexval((unsigned char) s[2])) >= 0){
+	    *d++ = (char) ((hi << 4) | lo);
+	    s += 2;
+	}
+	else
+	  *d++ = *s;
+    }
+
+    *d = '\0';
+}
+
+
+int
+pico_looks_like_path(char *s)
+{
+    if(!(s && *s))
+      return(0);
+
+    if(strstr(s, "://") != NULL && strncmp(s, "file://", 7))
+      return(0);
+
+    if(strchr(s, '@') != NULL && strchr(s, '/') == NULL)
+      return(0);
+
+    if(s[0] == '/' || s[0] == '~')
+      return(1);
+
+    if(s[0] == '.' && (s[1] == '/' || (s[1] == '.' && s[2] == '/')))
+      return(1);
+
+#ifdef	DOS
+    if(((s[0] >= 'A' && s[0] <= 'Z') || (s[0] >= 'a' && s[0] <= 'z'))
+       && s[1] == ':' && (s[2] == '\\' || s[2] == '/'))
+      return(1);
+
+    if(s[0] == '\\' && s[1] == '\\')
+      return(1);
+
+    if(strchr(s, '\\') != NULL)
+      return(1);
+#endif
+
+    return(strchr(s, '/') != NULL);
+}
+
+
+int
+pico_normalize_pasted_path(char *src, char *dst, size_t dstlen)
+{
+    char *p, *d, *copy;
+    size_t len;
+
+    if(!(src && dst && dstlen > 1))
+      return(0);
+
+    while(*src && (*src == ' ' || *src == '\t' || *src == '\r' || *src == '\n'))
+      src++;
+
+    len = strlen(src);
+    while(len > 0 && (src[len-1] == ' ' || src[len-1] == '\t'
+		      || src[len-1] == '\r' || src[len-1] == '\n'))
+      len--;
+
+    if(len == 0 || len >= dstlen)
+      return(0);
+
+    copy = (char *) malloc(len + 1);
+    if(!copy)
+      return(0);
+
+    memcpy(copy, src, len);
+    copy[len] = '\0';
+
+    if((copy[0] == '"' && copy[len-1] == '"')
+       || (copy[0] == '\'' && copy[len-1] == '\'')){
+	copy[len-1] = '\0';
+	memmove(copy, copy + 1, len - 1);
+    }
+
+    p = copy;
+    if(!strncmp(p, "file://", 7)){
+	p += 7;
+	if(!strncmp(p, "localhost", 9))
+	  p += 9;
+    }
+
+    pico_pct_decode(p);
+
+    d = dst;
+    while(*p && (size_t) (d - dst) < dstlen - 1){
+	if(*p == '\\' && (p[1] == ' ' || p[1] == '\\')){
+	    *d++ = p[1];
+	    p += 2;
+	}
+	else
+	  *d++ = *p++;
+    }
+
+    *d = '\0';
+    free(copy);
+
+    pfnexpand(dst, dstlen);
+    fixpath(dst, dstlen);
+    return(dst[0] != '\0');
+}
+
+
+int
+pico_kitty_path(char *src, char *dst, size_t dstlen)
+{
+    char *p, *d, *copy;
+    size_t len;
+
+    if(!(src && dst && dstlen > 3))
+      return(0);
+
+    while(*src && (*src == ' ' || *src == '\t' || *src == '\r' || *src == '\n'))
+      src++;
+
+    len = strlen(src);
+    while(len > 0 && (src[len-1] == ' ' || src[len-1] == '\t'
+		      || src[len-1] == '\r' || src[len-1] == '\n'))
+      len--;
+
+    if(len == 0 || len >= dstlen)
+      return(0);
+
+    copy = (char *) malloc(len + 1);
+    if(!copy)
+      return(0);
+
+    memcpy(copy, src, len);
+    copy[len] = '\0';
+
+    if((copy[0] == '"' && copy[len-1] == '"')
+       || (copy[0] == '\'' && copy[len-1] == '\'')){
+	copy[len-1] = '\0';
+	memmove(copy, copy + 1, len - 1);
+    }
+
+    p = copy;
+    if(!strncmp(p, "file://", 7)){
+	p += 7;
+	if(!strncmp(p, "localhost", 9))
+	  p += 9;
+    }
+
+    pico_pct_decode(p);
+
+    d = dst;
+    while(*p && (size_t) (d - dst) < dstlen - 1){
+	if(*p == '\\' && (p[1] == ' ' || p[1] == '\\')){
+	    *d++ = p[1];
+	    p += 2;
+	}
+	else if(*p == '\\'){
+	    *d++ = '/';
+	    p++;
+	}
+	else
+	  *d++ = *p++;
+    }
+
+    *d = '\0';
+    free(copy);
+    return(dst[0] != '\0');
+}
+
+
+int
+pico_resolve_attach_path(char *raw, char *fn, size_t fnlen, int *is_tmp)
+{
+    off_t sz = 0;
+    char  remote[NLINE];
+    long  nbytes = 0;
+    int   fr;
+
+    if(is_tmp)
+      *is_tmp = 0;
+
+    if(!pico_normalize_pasted_path(raw, fn, fnlen))
+      return(0);
+
+    if(!pico_looks_like_path(fn))
+      return(0);
+
+    if(fexist(fn, "r", &sz) == FIOSUC){
+	if((gmode & MDTREE) && !in_oper_tree(fn))
+	  return(0);
+
+	return(1);
+    }
+
+    if((gmode & (MDTREE | MDSCUR)) || !(Pmaster && Pmaster->term_fetch))
+      return(0);
+
+    if(!pico_kitty_path(raw, remote, sizeof(remote)))
+      return(0);
+
+    fr = (*Pmaster->term_fetch)(remote, fn, fnlen, &nbytes);
+    if(fr == 1 && fn[0]){
+	if(is_tmp)
+	  *is_tmp = 1;
+
+	return(1);
+    }
+
+    return(0);
+}
+
+
+int
+pico_pasted_path_file(char *raw, char *fn, size_t fnlen)
+{
+    return(pico_resolve_attach_path(raw, fn, fnlen, NULL));
+}
+
+
+int
+pico_consume_paste_if_attach(void)
+{
+    UCS  *u;
+    int   n, attached = 0;
+    char *utf8, *p, *next, fn[NLINE];
+
+    if(!(Pmaster && Pmaster->headents && pico_paste_is_fresh()))
+      return(0);
+
+    pico_paste_clear_fresh();
+
+    u = pico_paste_ucs4(&n);
+    if(!u || n <= 0)
+      return(0);
+
+    utf8 = ucs4_to_utf8_cpystr_n(u, n);
+    if(!utf8)
+      return(0);
+
+    {
+	int is_tmp = 0;
+
+	if(pico_resolve_attach_path(utf8, fn, sizeof(fn), &is_tmp)){
+	    (void) AppendAttachment(fn, NULL, NULL, is_tmp);
+	    attached = 1;
+	}
+    }
+    if(!attached){
+	int lines = 0, ok = 0;
+	char *copy;
+
+	copy = (char *) malloc(strlen(utf8) + 1);
+	if(copy){
+	    strcpy(copy, utf8);
+	    p = copy;
+	    while(p && *p){
+		next = strpbrk(p, "\r\n");
+		if(next){
+		    *next = '\0';
+		    next++;
+		    while(*next == '\r' || *next == '\n')
+		      next++;
+		}
+
+		while(*p == ' ' || *p == '\t')
+		  p++;
+
+		if(*p){
+		    char probe[NLINE];
+
+		    lines++;
+		    if(pico_kitty_path(p, probe, sizeof(probe))
+		       && pico_looks_like_path(probe))
+		      ok++;
+		}
+
+		p = next;
+	    }
+
+	    free(copy);
+	}
+
+	if(lines > 0 && ok == lines){
+	    p = utf8;
+	    while(p && *p){
+		next = strpbrk(p, "\r\n");
+		if(next){
+		    *next = '\0';
+		    next++;
+		    while(*next == '\r' || *next == '\n')
+		      next++;
+		}
+
+		while(*p == ' ' || *p == '\t')
+		  p++;
+
+		if(*p){
+		    int is_tmp = 0;
+
+		    if(pico_resolve_attach_path(p, fn, sizeof(fn), &is_tmp))
+		      (void) AppendAttachment(fn, NULL, NULL, is_tmp);
+		}
+
+		p = next;
+	    }
+
+	    attached = 1;
+	}
+    }
+
+    if(attached)
+      pico_paste_discard();
+
+    fs_give((void **) &utf8);
+    return(attached);
 }
 #endif	/* ATTACHMENTS */
 

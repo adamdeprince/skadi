@@ -31,7 +31,12 @@
 #define DA_ALLIMAGES	0x20		/* external browser displays all images	*/
 
 
+#define	XFER_HOST	0
+#define	XFER_CLIENT	1
+#define	XFER_CANCEL	-1
+
 /* exported prototypes */
+int	    alpine_xfer_where(char *, int);
 void	    attachment_screen(struct pine *);
 void	    write_attachment(int, long, ATTACH_S *, char *);
 int         write_attachment_to_file(MAILSTREAM *, long, ATTACH_S *, int, char *);

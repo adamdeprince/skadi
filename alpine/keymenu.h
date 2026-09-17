@@ -221,6 +221,7 @@ struct key_menu {
 #define MC_XSDELETE	808
 #define MC_XSHELP	809
 #define MC_ADDCALHEADER	810
+#define MC_DOWNLOAD	811
 
 /* Commands for S/MIME screens */
 #define MC_TRUST	900

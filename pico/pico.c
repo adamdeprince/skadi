@@ -543,6 +543,9 @@ execute(UCS c, int f, int n)
     KEYTAB *ktp;
     int     status, ww;
 
+    if(pico_consume_paste_if_attach())
+      return(TRUE);
+
     ktp = (Pmaster) ? &keytab[0] : &pkeytab[0];
 
     while (ktp->k_fp != NULL) {
@@ -1956,7 +1959,7 @@ composer_file_drop(int x, int y, char *filename)
 
     if((ComposerTopLine > 2 && x <= ComposerTopLine)
        || !LikelyASCII(filename)){
-	AppendAttachment(filename, NULL, NULL);
+	AppendAttachment(filename, NULL, NULL, 0);
 	attached++;
     }
     else{

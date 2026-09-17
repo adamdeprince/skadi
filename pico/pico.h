@@ -225,6 +225,8 @@ typedef struct pico_struct {
     long  (*msgntext)(long, int (*)(int));
 					/* callback to rcv uploaded text */
     int   (*upload)(char *, size_t, long *);
+					/* fetch a file from the local terminal */
+    int   (*term_fetch)(char *, char *, size_t, long *);
 					/* callback for checkpoint file dir */
     char *(*ckptdir)(char *, size_t);
 					/* callback to verify exit request */
