@@ -30,8 +30,8 @@ LDADD = ../c-client/utf8.o libpico.a osdep/libpicoosd.a \
 noinst_LIBRARIES = libpico.a
 
 libpico_a_SOURCES = attach.c basic.c bind.c browse.c buffer.c composer.c display.c file.c \
-	fileio.c line.c pico.c random.c region.c search.c window.c word.c \
-	ebind.h edef.h efunc.h estruct.h headers.h keydefs.h mode.h pico.h
+	fileio.c htmlfmt.c line.c pico.c random.c region.c search.c window.c word.c \
+	ebind.h edef.h efunc.h estruct.h headers.h keydefs.h mode.h pico.h htmlfmt.h
 
 AM_CPPFLAGS = -I@top_srcdir@/include
 

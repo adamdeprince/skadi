@@ -22,6 +22,7 @@
  * framing, are hard.
  */
 #include        "headers.h"
+#include        "htmlfmt.h"
 
 #include "osdep/terminal.h"
 
@@ -406,39 +407,10 @@ gotoeop(int f, int n)
 int
 getgoal(LINE *dlp)
 {
-    UCS    c;
-    register int    col;
-    register int    newcol;
-    register int    dbo;
+    HTML_VIEW st;
 
-    col = 0;
-    dbo = 0;
-    while (dbo != llength(dlp)) {
-	c = lgetc(dlp, dbo).c;
-	newcol = col;
-
-	if (c == '\t'){
-	    newcol |= 0x07;
-	    ++newcol;
-	}
-	else if (ISCONTROL(c)){
-	    newcol += 2;
-	}
-	else{
-	    int w;
-
-	    w = wcellwidth(c);
-	    newcol += (w >= 0 ? w : 1);
-	}
-
-	if (newcol > curgoal)
-	  break;
-
-	col = newcol;
-	++dbo;
-    }
-
-    return (dbo);
+    html_view_to_line(dlp, &st);
+    return(html_doto_for_col(dlp, &st, curgoal));
 }
 
 

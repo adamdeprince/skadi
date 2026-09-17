@@ -658,6 +658,13 @@ Additions include:
      press <TT>^K</TT> to switch to a client path, which kitty pulls
      into the message. Kitty asks you to allow each client transfer.
 
+<LI> The composer accepts basic HTML markup via Alt-B/I/U (bold, italic,
+     underline), Alt-L/O (bullet and numbered lists), and a few other
+     tags (quote, heading, preformatted, rule, link, code, strikethrough).
+     Those tags are shown as formatting in the composer (lists as bullets
+     or numbers, bold/italic/underline as terminal attributes) and the
+     mail is sent as text/html.
+
 <LI> Alpine can pass an HTML message to an external web browser, by using the
      &quot;External&quot; command in the <a href="h_attachment_screen">ATTACHMENT INDEX</a>
      screen. <A href="h_command_external_browser">Learn more</A>.
@@ -15885,6 +15892,21 @@ EXIT COMMANDS    |  GENERAL COMMANDS    | ^T     To Addressbook
 ^X   eXit/save   |   ^Z    Suspend      | ^L     Redraw Screen
 </PRE>
 <!--chtml endif-->
+<P>
+HTML markup (Alt plus a letter; kitty and other modern terminals report
+Alt as a modifier). Mark a region with ^^ first to wrap existing text.
+<PRE>
+  Alt-B   Bold              Alt-I   Italic
+  Alt-U   Underline         Alt-S   Strikethrough
+  Alt-C   Code              Alt-H   Heading
+  Alt-Q   Block quote       Alt-P   Preformatted
+  Alt-R   Horizontal rule   Alt-K   Link (asks for URL)
+  Alt-L   Bullet list       Alt-O   Numbered list
+</PRE>
+The composer shows tags as formatting (bullets, numbers, bold, italic,
+underline) rather than as raw HTML. A message that contains these tags
+is sent as text/html.
+<P>
 &lt;End of help on this topic&gt;
 </BODY>
 </HTML>

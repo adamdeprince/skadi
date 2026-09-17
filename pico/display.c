@@ -32,6 +32,7 @@
 #endif
 
 #include	"headers.h"
+#include	"htmlfmt.h"
 #include	"../pith/charconv/filesys.h"
 #include	"../pith/charconv/utf8.h"
 
@@ -39,6 +40,8 @@
 void     vtmove(int, int);
 void     vtputc(CELL);
 void     vteeol(void);
+static void html_vtputc_cb(CELL, void *);
+static int  vtput_html_line(LINE *, HTML_VIEW *);
 void     updateline(int, CELL *, CELL *, short *, int);
 void     updatelinecolor(int, CELL *, CELL *, short *, int);
 void     updext(void);
@@ -350,6 +353,21 @@ vtputc(CELL c)
  * Erase from the end of the software cursor to the end of the line on which
  * the software cursor is located.
  */
+static void
+html_vtputc_cb(CELL c, void *arg)
+{
+    (void) arg;
+    vtputc(c);
+}
+
+
+static int
+vtput_html_line(LINE *lp, HTML_VIEW *st)
+{
+    return(html_render_line(lp, st, html_vtputc_cb, NULL, -1, NULL));
+}
+
+
 void
 vteeol(void)
 {
@@ -422,6 +440,7 @@ update(void)
     int     scroll = 0;
     int     repaint= 0;
     CELL	     c;
+    HTML_VIEW	     hv;
     PCOLORS *pcolors = Pmaster && Pmaster->colors ? Pmaster->colors : Pcolors;
 
 #if	TYPEAH
@@ -610,62 +629,24 @@ out:
                     lp = lforw(lp);
 		}
 		vscreen[i]->v_flag |= (lp->l_sig ? VFSIG : 0)| VFCHG;
-		/* compute physical length of line in screen */
-		vscreen[i]->v_length = 0;
-		for (j = 0; vscreen[i]->v_length < term.t_ncol
-			    && j < llength(lp); ++j){
-		    c = lgetc(lp, j);
-		    if(c.c == '\t'){
-		       vscreen[i]->v_length |= 0x07;
-		       vscreen[i]->v_length++;
-		    }
-		    else if(ISCONTROL(c.c)){
-		       vscreen[i]->v_length += 2;
-		    }
-		    else{
-		       int w;
-
-		       w = wcellwidth((UCS) c.c);
-		       vscreen[i]->v_length += (w >= 0 ? w : 1);
-		    }
-		}
+		html_view_to_line(lp, &hv);
                 vtmove(i, 0);
-
-                for (j = 0; j < llength(lp); ++j)
-                    vtputc(lgetc(lp, j));
+		vscreen[i]->v_length = vtput_html_line(lp, &hv);
                 vteeol();
 	    }
 	    else if ((wp->w_flag & (WFEDIT | WFHARD)) != 0){
+		html_view_to_line(wp->w_linep, &hv);
                 while (i < wp->w_toprow+wp->w_ntrows){
                     vscreen[i]->v_flag |= (lp->l_sig ? VFSIG : 0 )| VFCHG;
-		    /* compute physical length of line in screen */
-		    vscreen[i]->v_length = 0;
-		    for (j = 0; vscreen[i]->v_length < term.t_ncol
-			    && j < llength(lp); ++j){
-		        c = lgetc(lp, j);
-		        if(c.c == '\t'){
-		           vscreen[i]->v_length |= 0x07;
-		           vscreen[i]->v_length++;
-		        }
-		        else if(ISCONTROL(c.c)){
-		           vscreen[i]->v_length += 2;
-		        }
-		        else{
-		           int w;
-
-			   w = wcellwidth((UCS) c.c);
-		           vscreen[i]->v_length += (w >= 0 ? w : 1);
-		       }
-		    }
                     vtmove(i, 0);
 
 		    /* if line has been changed */
                     if (lp != wp->w_bufp->b_linep){
-                        for (j = 0; j < llength(lp); ++j)
-                            vtputc(lgetc(lp, j));
-
+			vscreen[i]->v_length = vtput_html_line(lp, &hv);
                         lp = lforw(lp);
 		    }
+		    else
+		      vscreen[i]->v_length = 0;
 
                     vteeol();
                     ++i;
@@ -700,26 +681,8 @@ out:
         lp = lforw(lp);
     }
 
-    curcol = 0;
-    i = 0;
-
-    while (i < curwp->w_doto){
-	c = lgetc(lp, i++);
-
-        if(c.c == '\t'){
-            curcol |= 0x07;
-	    ++curcol;
-	}
-        else if(ISCONTROL(c.c)){
-            curcol += 2;
-	}
-	else{
-	    int w;
-
-	    w = wcellwidth((UCS) c.c);
-	    curcol += (w >= 0 ? w : 1);
-	}
-    }
+    html_view_to_line(curwp->w_dotp, &hv);
+    html_render_line(curwp->w_dotp, &hv, NULL, NULL, curwp->w_doto, &curcol);
 
     if (curcol >= term.t_ncol) { 		/* extended line. */
 	/* flag we are extended and changed */
@@ -745,8 +708,8 @@ out:
 		if ((wp != curwp) || (lp != wp->w_dotp) ||
 		    (curcol < term.t_ncol)) {
 		    vtmove(i, 0);
-		    for (j = 0; j < llength(lp); ++j)
-		      vtputc(lgetc(lp, j));
+		    html_view_to_line(lp, &hv);
+		    (void) vtput_html_line(lp, &hv);
 		    vteeol();
 
 		    /* this line no longer is extended */
@@ -916,9 +879,9 @@ updext(void)
 {
     int   rcursor;		/* real cursor location */
     LINE *lp;			/* pointer to current line */
+    HTML_VIEW hv;
     int   j;			/* index into line */
     int   w = 0;
-    int   ww;
 
     /*
      * Calculate what column the real cursor will end up in.
@@ -943,21 +906,13 @@ updext(void)
      * not straddle the boundary. If it does, move over one cell.
      */
     lp = curwp->w_dotp;			/* line to output */
-    for (j=0; j<llength(lp) && w < lbound; ++j){
-	ww = wcellwidth((UCS) lgetc(lp, j).c);
-	w += (ww >= 0 ? ww : 1);
-    }
-
-    if(w > lbound)
-      lbound = w;
-
 
     /* scan through the line outputting characters to the virtual screen
      * once we reach the left edge
      */
+    html_view_to_line(lp, &hv);
     vtmove(currow, -lbound);		/* start scanning offscreen */
-    for (j=0; j<llength(lp); ++j)	/* until the end-of-line */
-      vtputc(lgetc(lp, j));
+    (void) vtput_html_line(lp, &hv);
 
     /* truncate the virtual line */
     vteeol();
@@ -1107,15 +1062,12 @@ updatelinecolor (int row, CELL vline[], CELL pline[], short *flags, int len)
 	   else if(level == 1) pcolor = pcolors->qllcp;
 	   else if(level == 2) pcolor = pcolors->qlllcp;
 	}
-	if(cp1->a == 1)
+	if(cp1->a & HA_REV)
 	   pcolor = pcolors->rtcp;	/* pcolor = proposed color */
 	if(change == 0)
 	  pico_set_colorp(pcolor, PSC_NONE);
-	else
-	  (*term.t_rev)(cp1->a);	/* set inverse for this char */
-
-	if(change == 0)
-	   (*term.t_rev)(cp1->a);	/* set inverse for this char */
+	html_term_cell_attr(cp1->a & ~HA_REV);
+	(*term.t_rev)(cp1->a & HA_REV);
 	(*term.t_putchar)(cp1->c);
 
 	ww = wcellwidth((UCS) cp1->c);
@@ -1129,6 +1081,7 @@ updatelinecolor (int row, CELL vline[], CELL pline[], short *flags, int len)
 	free_color_pair(&lastc);
     }
 
+    html_term_cell_attr(0);
     (*term.t_rev)(0);			/* turn off inverse anyway! */
 
     if (cp5 != cp3 || cleartoeol)	/* Erase. */
@@ -1321,7 +1274,8 @@ updateline(int row,			/* row on screen */
 	int ww;
 
 	if(display){
-	    (*term.t_rev)(cp1->a);	/* set inverse for this char */
+	    html_term_cell_attr(cp1->a & ~HA_REV);
+	    (*term.t_rev)(cp1->a & HA_REV);
 	    (*term.t_putchar)(cp1->c);
 	}
 
@@ -1331,6 +1285,7 @@ updateline(int row,			/* row on screen */
 	*cp2++ = *cp1++;
     }
 
+    html_term_cell_attr(0);
     (*term.t_rev)(0);			/* turn off inverse anyway! */
 
     if (cp5 != cp3 || cleartoeol) {	/* Erase. */
@@ -2677,6 +2632,13 @@ unknown_command(UCS c)
     else if(c & CTRL && c >= (CTRL|'@') && c <= (CTRL|'_')){
 	ch = c - (CTRL|'@') + '@';
 	snprintf(s, sizeof(buf), "^%c", ch);
+    }
+    else if(c & META){
+	ch = (char) (c & 0x7f);
+	if(ch >= 'a' && ch <= 'z')
+	  ch = (char) (ch - 'a' + 'A');
+
+	snprintf(s, sizeof(buf), "Alt-%c", ch);
     }
     else
      switch(c){

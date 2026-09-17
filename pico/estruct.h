@@ -38,7 +38,7 @@
 
 /*	internal constants	*/
 
-#define	NBINDS	50			/* max # of bound keys		*/
+#define	NBINDS	80			/* max # of bound keys		*/
 #ifdef	MAXPATH
 #define NFILEN  MAXPATH                 /* # of bytes, file name        */
 #else

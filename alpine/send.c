@@ -59,6 +59,7 @@
 #include "../pith/mimetype.h"
 #include "../pith/send.h"
 #include "../pith/smime.h"
+#include "../pith/htmlbody.h"
 #include "../pith/offcache.h"
 #include "../pith/goblindl.h"
 
@@ -6247,12 +6248,17 @@ create_message_body(struct mail_bodystruct **b, PATMT *attach, int flow_it)
 void
 create_message_body_text(struct mail_bodystruct *b, int flow_it)
 {
+    int html = 0;
+
     set_mime_type_by_grope(b);
+    htmlify_composed_text(b);
+    html = (b && b->type == TYPETEXT && b->subtype && !strucmp(b->subtype, "HTML"));
     if(b != NULL){
        remove_parameter(&b->parameter, "format"); /* we will set it up below */
        remove_parameter(&b->parameter, "delsp");  /* we never set this up    */
     }
-    if(F_OFF(F_QUELL_FLOWED_TEXT, ps_global)
+    if(!html
+       && F_OFF(F_QUELL_FLOWED_TEXT, ps_global)
        && F_OFF(F_STRIP_WS_BEFORE_SEND, ps_global)
        && flow_it)
       set_parameter(b ? &b->parameter : NULL, "format", "flowed");

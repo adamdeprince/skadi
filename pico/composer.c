@@ -477,7 +477,7 @@ int
 HeaderEditor(int f, int n)
 {
     register  int	i;
-    UCS                 ch = 0, lastch;
+    UCS                 ch = 0, lastch, markup = 0;
     register  char	*bufp;
     struct headerentry *h;
     int                 cur_e, mangled, retval = -1,
@@ -1562,6 +1562,16 @@ nomore_to_complete:
 	    break;
 
 	  default :				/* huh? */
+	    if((ch & META) && !hdr_only){
+		/*
+		 * Alt+b and the other markup keys apply to the body.
+		 * Leave the header fields so execute() can run them.
+		 */
+		InvertPrompt(ods.cur_e, FALSE);
+		ods.p_line = ComposerTopLine;
+		markup = ch;
+		break;
+	    }
 bleep:
 	    unknown_command(ch);
 
@@ -1580,6 +1590,9 @@ bleep:
 	PaintHeader(COMPOSER_TOP_LINE, FALSE);
 	PaintBody(1);
     }
+
+    if(markup)
+      (void) execute(markup, FALSE, 1);
     
     return(retval);
 }

@@ -20,6 +20,7 @@
  */
 
 #include	"headers.h"
+#include	"htmlfmt.h"
 
 #include "osdep/terminal.h"
 
@@ -81,30 +82,12 @@ showcpos(int f, int n)
 int
 getccol(int bflg)
 {
-    UCS c;
-    int i, col;
+    HTML_VIEW st;
+    int	      col = 0;
 
-    col = 0;
-    for (i=0; i<curwp->w_doto; ++i) {
-	c = lgetc(curwp->w_dotp, i).c;
-	if (c!=' ' && c!='\t' && bflg)
-	  break;
-
-	if (c == '\t'){
-	    col |= 0x07;
-	    ++col;
-	}
-	else if (ISCONTROL(c)){
-	    col += 2;
-	}
-	else{
-	    int ww;
-
-	    ww = wcellwidth(c);
-	    col += (ww >= 0 ? ww : 1);
-	}
-    }
-
+    (void) bflg;
+    html_view_to_line(curwp->w_dotp, &st);
+    html_render_line(curwp->w_dotp, &st, NULL, NULL, curwp->w_doto, &col);
     return(col);
 }
 
