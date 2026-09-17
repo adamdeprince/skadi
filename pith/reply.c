@@ -14,6 +14,7 @@
 
 #include "../pith/headers.h"
 #include "../pith/reply.h"
+#include "../pith/htmlbody.h"
 #include "../pith/send.h"
 #include "../pith/init.h"
 #include "../pith/state.h"
@@ -2727,6 +2728,57 @@ It's up to calling routines to plug in signature appropriately
 As with all internal text, NVT end-of-line conventions are observed.
 DOESN'T sanity check the prefix given!!!
   ----*/
+/*
+ * Quote a text/html part with its simple markup kept: fetch it
+ * decoded, reduce it to the composer's tag set, and write it out
+ * line by line behind prefix.  The reply then starts in HTML mode.
+ */
+static char *
+reply_html_markup(MAILSTREAM *stream, long int msg_no, char *part_no,
+		  long partial, long *len, gf_o_t pc, char *prefix,
+		  unsigned flags)
+{
+    STORE_S *so;
+    gf_o_t   tpc;
+    char    *err, *markup, *lp, *nl;
+    int	     width;
+
+    so = so_get(CharStar, NULL, EDIT_ACCESS);
+    if(!so)
+      return(_("out of memory"));
+
+    gf_set_so_writec(&tpc, so);
+    err = detach(stream, msg_no, part_no, partial, len, tpc, NULL,
+		 ((flags & GBPT_PEEK) ? FT_PEEK : 0)
+		 | ((flags & GBPT_NOINTR) ? DT_NOINTR : 0));
+    gf_clear_so_writec(so);
+    if(!err){
+	width = 76 - (prefix ? (int) strlen(prefix) : 0);
+	markup = html_simple_to_markup((char *) so_text(so), width);
+	for(lp = markup; lp && *lp; ){
+	    nl = strchr(lp, '\n');
+	    if(nl)
+	      *nl = '\0';
+
+	    if(prefix)
+	      gf_puts(prefix, pc);
+
+	    gf_puts(lp, pc);
+	    gf_puts(NEWLINE, pc);
+	    lp = nl ? nl + 1 : lp + strlen(lp);
+	}
+
+	if(markup)
+	  fs_give((void **) &markup);
+
+	html_compose_start_html = 1;
+    }
+
+    so_give(&so);
+    return(err);
+}
+
+
 int
 get_body_part_text(MAILSTREAM *stream, struct mail_bodystruct *body,
 		   long int msg_no, char *part_no, long partial, gf_o_t pc,
@@ -2739,6 +2791,7 @@ get_body_part_text(MAILSTREAM *stream, struct mail_bodystruct *body,
     int		filtcnt = 0;
     char       *free_this = NULL;
     DELQ_S      dq;
+    int		keep_markup = 0;
 
     memset(filters, 0, sizeof(filters));
     if(ret_charset)
@@ -2892,11 +2945,15 @@ get_body_part_text(MAILSTREAM *stream, struct mail_bodystruct *body,
 	}
 	else if(strucmp(body->subtype,"html") == 0){
 	    if((flags & GBPT_HTML_OK) != GBPT_HTML_OK){
-		filters[filtcnt].filter = gf_html2plain;
-		filters[filtcnt++].data = gf_html2plain_opt(NULL,
-							    ps_global->ttyo->screen_cols,
-							    non_messageview_margin(),
-							    NULL, NULL, GFHP_STRIPPED);
+		if(prefix && F_ON(F_REPLY_KEEP_HTML_MARKUP, ps_global))
+		  keep_markup = 1;		/* quoted with markup, below */
+		else{
+		    filters[filtcnt].filter = gf_html2plain;
+		    filters[filtcnt++].data = gf_html2plain_opt(NULL,
+								ps_global->ttyo->screen_cols,
+								non_messageview_margin(),
+								NULL, NULL, GFHP_STRIPPED);
+		}
 	    }
 	}
     }
@@ -2931,10 +2988,14 @@ get_body_part_text(MAILSTREAM *stream, struct mail_bodystruct *body,
 	filters[filtcnt++].data = gf_line_test_opt(delete_quotes, &dq);
     }
 
-    err = detach(stream, msg_no, part_no, partial, &len, pc,
-		 filters[0].filter ? filters : NULL,
-		 ((flags & GBPT_PEEK) ? FT_PEEK : 0)
-		 | ((flags & GBPT_NOINTR) ? DT_NOINTR : 0));
+    if(keep_markup)
+      err = reply_html_markup(stream, msg_no, part_no, partial, &len, pc,
+			      prefix, flags);
+    else
+      err = detach(stream, msg_no, part_no, partial, &len, pc,
+		   filters[0].filter ? filters : NULL,
+		   ((flags & GBPT_PEEK) ? FT_PEEK : 0)
+		   | ((flags & GBPT_NOINTR) ? DT_NOINTR : 0));
 
     if(free_this)
       fs_give((void **) &free_this);

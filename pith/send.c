@@ -14,6 +14,7 @@
 
 #include "../pith/headers.h"
 #include "../pith/send.h"
+#include "../pith/htmlbody.h"
 #include "../pith/state.h"
 #include "../pith/conf.h"
 #include "../pith/store.h"
@@ -94,9 +95,6 @@ PRIORITY_S priorities[] = {
 
 
 #define ctrl(c) ((c) & 0x1f)
-
-/* which message part to test for xliteration */
-typedef enum {MsgBody, HdrText} MsgPart;
 
 
 /*
@@ -310,6 +308,147 @@ postponed_stream(MAILSTREAM **streamp, char *mbox, char *type, int checknmsgs)
 }
 
 
+/*
+ * A postponed HTML message is multipart/alternative, possibly inside
+ * multipart/related (inline images), possibly inside multipart/mixed
+ * (attachments).  Put the html part, converted back to composer form,
+ * into so and build *body as that text plus the other parts.  Returns
+ * 1 when b had that shape, 0 to let the caller do the usual thing.
+ */
+static int
+redraft_html_unwrap(MAILSTREAM *stream, long int cont_msg, BODY *b,
+		    BODY **body, STORE_S *so, unsigned gbpt_flags)
+{
+    BODY    *mixed = NULL, *related = NULL, *alt = NULL, *html = NULL, *tb, *text;
+    PART    *p, *np, *tail = NULL, *first = NULL;
+    STORE_S *tso;
+    gf_o_t   tpc, pc;
+    char     sec[64], psec[64], relsec[64], *conv, *lp, *nl;
+    int	     k, nparts = 0;
+
+    if(!(b && b->type == TYPEMULTIPART && b->subtype && b->nested.part))
+      return(0);
+
+    sec[0] = relsec[0] = '\0';
+    tb = b;
+    if(!strucmp(b->subtype, "MIXED")){
+	mixed = b;
+	tb = &b->nested.part->body;
+	strncpy(sec, "1", sizeof(sec));
+    }
+
+    if(tb->type == TYPEMULTIPART && tb->subtype
+       && !strucmp(tb->subtype, "RELATED") && tb->nested.part){
+	related = tb;
+	strncpy(relsec, sec, sizeof(relsec));
+	relsec[sizeof(relsec)-1] = '\0';
+	snprintf(sec, sizeof(sec), "%s%s1", relsec, relsec[0] ? "." : "");
+	tb = &tb->nested.part->body;
+    }
+
+    if(tb->type == TYPEMULTIPART && tb->subtype
+       && !strucmp(tb->subtype, "ALTERNATIVE")){
+	alt = tb;
+	for(p = alt->nested.part, k = 1; p; p = p->next, k++)
+	  if(p->body.type == TYPETEXT && p->body.subtype
+	     && !strucmp(p->body.subtype, "HTML")){
+	      html = &p->body;
+	      snprintf(psec, sizeof(psec), "%s%s%d", sec, sec[0] ? "." : "", k);
+	      strncpy(sec, psec, sizeof(sec));
+	      sec[sizeof(sec)-1] = '\0';
+	      break;
+	  }
+    }
+    else if(tb->type == TYPETEXT && tb->subtype && !strucmp(tb->subtype, "HTML"))
+      html = tb;
+
+    if(!html || !sec[0])
+      return(0);
+
+    /* the html text, decoded to UTF-8, back in composer form */
+    tso = so_get(CharStar, NULL, EDIT_ACCESS);
+    if(!tso)
+      return(0);
+
+    gf_set_so_writec(&tpc, tso);
+    ps_global->postpone_no_flow = 1;
+    get_body_part_text(stream, html, cont_msg, sec, 0L, tpc, NULL, NULL,
+		       gbpt_flags | GBPT_HTML_OK);
+    ps_global->postpone_no_flow = 0;
+    gf_clear_so_writec(tso);
+    conv = html_to_composer((char *) so_text(tso));
+    so_give(&tso);
+
+    gf_set_so_writec(&pc, so);
+    for(lp = conv; lp && *lp; ){
+	nl = strchr(lp, '\n');
+	if(nl)
+	  *nl = '\0';
+
+	gf_puts(lp, pc);
+	gf_puts(NEWLINE, pc);
+	lp = nl ? nl + 1 : lp + strlen(lp);
+    }
+
+    gf_clear_so_writec(so);
+    if(conv)
+      fs_give((void **) &conv);
+
+    html_compose_start_html = 1;
+
+    text = mail_newbody();
+    text->type = TYPETEXT;
+    text->contents.text.data = (void *) so;
+
+    /* inline images, then the other attachments, keep their parts */
+    if(related){
+	for(p = related->nested.part->next, k = 2; p; p = p->next, k++){
+	    np = mail_newbody_part();
+	    copy_body(&np->body, &p->body);
+	    snprintf(psec, sizeof(psec), "%s%s%d", relsec, relsec[0] ? "." : "", k);
+	    (void) fetch_contents(stream, cont_msg, psec, &np->body);
+	    if(tail)
+	      tail->next = np;
+	    else
+	      first = np;
+
+	    tail = np;
+	    nparts++;
+	}
+    }
+
+    if(mixed){
+	for(p = mixed->nested.part->next, k = 2; p; p = p->next, k++){
+	    np = mail_newbody_part();
+	    copy_body(&np->body, &p->body);
+	    snprintf(psec, sizeof(psec), "%d", k);
+	    (void) fetch_contents(stream, cont_msg, psec, &np->body);
+	    if(tail)
+	      tail->next = np;
+	    else
+	      first = np;
+
+	    tail = np;
+	    nparts++;
+	}
+    }
+
+    if(nparts){
+	*body = mail_newbody();
+	(*body)->type = TYPEMULTIPART;
+	(*body)->subtype = cpystr("MIXED");
+	(*body)->nested.part = mail_newbody_part();
+	(*body)->nested.part->body = *text;
+	(*body)->nested.part->next = first;
+	fs_give((void **) &text);
+    }
+    else
+      *body = text;
+
+    return(1);
+}
+
+
 int
 redraft_work(MAILSTREAM **streamp, long int cont_msg, ENVELOPE **outgoing,
 	     struct mail_bodystruct **body, char **fcc, char **lcc,
@@ -328,6 +467,7 @@ redraft_work(MAILSTREAM **streamp, long int cont_msg, ENVELOPE **outgoing,
     int		 i, pine_generated = 0, our_replyto = 0;
     int          added_to_role = 0;
     unsigned	 gbpt_flags = GBPT_NONE;
+    int		 html_done = 0;
     MESSAGECACHE *mc;
 
     if(!(streamp && *streamp))
@@ -836,7 +976,11 @@ redraft_work(MAILSTREAM **streamp, long int cont_msg, ENVELOPE **outgoing,
 	    (*outgoing)->message_id = generate_message_id(role ? *role : NULL);
 	}
 
-	if(b && b->type != TYPETEXT){
+	html_done = (b && (flags & REDRAFT_HTML))
+		      ? redraft_html_unwrap(stream, cont_msg, b, body, so, gbpt_flags)
+		      : 0;
+
+	if(!html_done && b && b->type != TYPETEXT){
 	  if(b->type == TYPEMULTIPART){
 	      if(strucmp(b->subtype, "mixed")){
 		  q_status_message1(SM_INFO, 3, 4, 
@@ -856,7 +1000,10 @@ redraft_work(MAILSTREAM **streamp, long int cont_msg, ENVELOPE **outgoing,
 		
 	gf_set_so_writec(&pc, so);
 
-	if(b && b->type != TYPETEXT){	/* already TYPEMULTIPART */
+	if(html_done){
+	    /* text and attachments already set up from the html part */
+	}
+	else if(b && b->type != TYPETEXT){	/* already TYPEMULTIPART */
 	    *body			   = copy_body(NULL, b);
 	    part			   = (*body)->nested.part;
 	    part->body.contents.text.data = (void *)so;

@@ -73,8 +73,13 @@ backchar(int f, int n)
 	    curwp->w_dotp  = lp;
 	    curwp->w_doto  = llength(lp);
 	    curwp->w_flag |= WFMOVE;
-	} else
-	  curwp->w_doto--;
+	} else{
+	    int s, e;
+
+	    curwp->w_doto--;
+	    while(html_hidden_span(curwp->w_dotp, curwp->w_doto, &s, &e))
+	      curwp->w_doto = s;
+	}
     }
 
     return (TRUE);
@@ -107,8 +112,13 @@ backchar_no_header_editor(int f, int n)
 	    curwp->w_dotp  = lp;
 	    curwp->w_doto  = llength(lp);
 	    curwp->w_flag |= WFMOVE;
-	} else
-	  curwp->w_doto--;
+	} else{
+	    int s, e;
+
+	    curwp->w_doto--;
+	    while(html_hidden_span(curwp->w_dotp, curwp->w_doto, &s, &e))
+	      curwp->w_doto = s;
+	}
     }
 
     return (TRUE);
@@ -146,8 +156,13 @@ forwchar(int f, int n)
 	    curwp->w_doto  = 0;
 	    curwp->w_flag |= WFMOVE;
 	}
-	else
-	  curwp->w_doto++;
+	else{
+	    int s, e;
+
+	    curwp->w_doto++;
+	    while(html_hidden_span(curwp->w_dotp, curwp->w_doto, &s, &e))
+	      curwp->w_doto = e;
+	}
     }
     
     return (TRUE);

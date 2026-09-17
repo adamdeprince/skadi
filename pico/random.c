@@ -163,6 +163,9 @@ newline(int f, int n)
 	curwp->w_doto = i;
 	ldelete(dellen, NULL);
     }
+    if(n == 1 && html_newline_in_item())
+      return(TRUE);
+
     /* insert some lines */
     while (n--) {
 	if ((s=lnewline()) != TRUE)
@@ -200,6 +203,9 @@ forwdel(int f, int n)
 	  kdelete();
 	thisflag |= CFKILL;
     }
+
+    if(n == 1 && f == FALSE && html_delete_at_dot())
+      return(TRUE);
 
     return (ldelete((long) n, f ? kinsert : NULL));
 }
@@ -243,6 +249,9 @@ backdel(int f, int n)
 
 	thisflag |= CFKILL;
     }
+
+    if(n == 1 && f == FALSE && html_delete_before_dot())
+      return(TRUE);
 
     if ((s=backchar(f, n)) == TRUE)
       s = ldelete((long) n, f ? kinsert : NULL);
