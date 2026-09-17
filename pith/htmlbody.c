@@ -790,6 +790,157 @@ html_line_is_block(char *s, char *end)
  * Convert the composer text in b (text/plain) into text/html in place.
  * The caller decides whether that is wanted; this always converts.
  */
+/*
+ * The composer text as it was before htmlify_composed_text() rewrote
+ * it.  When posting fails, pine_send loops back into the composer and
+ * pulls its text out of the body, which by then holds the plain-text
+ * rendering; html_restore_composed_text() puts the original back.
+ */
+static STORE_S *html_saved_text = NULL;
+
+static void
+html_save_text(STORE_S *so)
+{
+    if(html_saved_text)
+      so_give(&html_saved_text);
+
+    html_saved_text = so;
+}
+
+
+void
+html_forget_composed_text(void)
+{
+    if(html_saved_text)
+      so_give(&html_saved_text);
+}
+
+
+/*
+ * Undo create_message_body_text() and html_group_related() on a message
+ * whose posting failed: the first text container (multipart/alternative,
+ * possibly inside multipart/related for inline images, possibly inside
+ * multipart/mixed) becomes the original text/plain again and any inline
+ * image parts go back to being ordinary attachments.  Returns 1 when the
+ * body was restored.
+ */
+int
+html_restore_composed_text(struct mail_bodystruct **bp)
+{
+    BODY *top, *node, *mixed = NULL, *html = NULL, *tmp;
+    PART *shell, *images = NULL, *p, *tail;
+
+    if(!(html_saved_text && bp && *bp))
+      return(0);
+
+    top = *bp;
+    node = top;
+    if(top->type == TYPEMULTIPART && top->subtype
+       && !strucmp(top->subtype, "MIXED") && top->nested.part){
+	mixed = top;
+	node = &top->nested.part->body;
+    }
+
+    /* multipart/related: keep the image parts, drop the shell */
+    if(node->type == TYPEMULTIPART && node->subtype
+       && !strucmp(node->subtype, "RELATED") && node->nested.part){
+	BODY inner;
+
+	shell = node->nested.part;
+	images = shell->next;
+	shell->next = NULL;
+	inner = shell->body;
+	memset(&shell->body, 0, sizeof(shell->body));
+	fs_give((void **) &shell);
+	if(node->subtype)
+	  fs_give((void **) &node->subtype);
+
+	mail_free_body_parameter(&node->parameter);
+	*node = inner;
+    }
+
+    if(node->type == TYPEMULTIPART && node->subtype
+       && !strucmp(node->subtype, "ALTERNATIVE") && node->nested.part){
+	for(p = node->nested.part; p; p = p->next)
+	  if(p->body.type == TYPETEXT && p->body.subtype
+	     && !strucmp(p->body.subtype, "HTML"))
+	    html = &p->body;
+    }
+    else if(node->type == TYPETEXT && node->subtype
+	    && !strucmp(node->subtype, "HTML"))
+      html = node;
+
+    if(!html){
+	/* not a shape we made; put the images back where they were */
+	if(images){
+	    if(mixed){
+		for(tail = mixed->nested.part; tail->next; tail = tail->next)
+		  ;
+
+		tail->next = images;
+	    }
+	    else
+	      mail_free_body_part(&images);
+	}
+
+	return(0);
+    }
+
+    /* the original parameters (charset) travelled with the html part */
+    if(html != node){
+	PARAMETER *keep = html->parameter;
+
+	html->parameter = NULL;
+	pine_free_body_data(node);
+	mail_free_body_part(&node->nested.part);
+	if(node->subtype)
+	  fs_give((void **) &node->subtype);
+
+	mail_free_body_parameter(&node->parameter);
+	memset(node, 0, sizeof(*node));
+	node->parameter = keep;
+    }
+    else{
+	pine_free_body_data(node);
+	if(node->subtype)
+	  fs_give((void **) &node->subtype);
+    }
+
+    node->type = TYPETEXT;
+    node->subtype = cpystr("PLAIN");
+    node->encoding = ENCOTHER;
+    node->contents.text.data = (void *) html_saved_text;
+    html_saved_text = NULL;
+
+    for(p = images; p; p = p->next){
+	if(p->body.disposition.type)
+	  fs_give((void **) &p->body.disposition.type);
+
+	p->body.disposition.type = cpystr("attachment");
+    }
+
+    if(images){
+	if(!mixed){
+	    /* the related part had been promoted; rebuild the mixed */
+	    tmp = mail_newbody();
+	    tmp->type = TYPEMULTIPART;
+	    tmp->nested.part = mail_newbody_part();
+	    tmp->nested.part->body = *node;
+	    memset(node, 0, sizeof(*node));
+	    mail_free_body(&top);
+	    *bp = mixed = tmp;
+	}
+
+	for(tail = mixed->nested.part; tail->next; tail = tail->next)
+	  ;
+
+	tail->next = images;
+    }
+
+    return(1);
+}
+
+
 void
 htmlify_composed_text(struct mail_bodystruct *b, char *charset)
 {
@@ -920,7 +1071,7 @@ htmlify_composed_text(struct mail_bodystruct *b, char *charset)
       so_puts(nso, "</body></html>\n");
 
     fs_give((void **) &src);
-    so_give(&so);
+    html_save_text(so);
     b->contents.text.data = (void *) nso;
     if(b->subtype)
       fs_give((void **) &b->subtype);
@@ -1716,7 +1867,8 @@ html_simple_to_markup(char *src, int width)
 		    mk_end_para(&c);
 		    if(!closing){
 			c.blank = 1;
-			mk_inline(&c, (name[1] <= '3') ? name : "h3", 0);
+			mk_inline(&c, (name[1] == '1') ? "h1"
+				      : (name[1] == '2') ? "h2" : "h3", 0);
 		    }
 		}
 		else if(!strcmp(name, "ul") || !strcmp(name, "ol")){

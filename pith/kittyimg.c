@@ -208,7 +208,7 @@ static void	 kitty_fit(int, int, int, int, int *, int *, int *, int *);
 static KITTY_THUMB_S *kitty_thumb_make(const char *, const unsigned char *, size_t);
 static KITTY_THUMB_S *kitty_cache_find(const char *);
 static void	 kitty_cache_add(KITTY_THUMB_S *);
-static void	 kitty_cache_evict(void);
+static void	 kitty_cache_evict(KITTY_THUMB_S *);
 static int	 kitty_thumb_in_use(KITTY_THUMB_S *);
 static void	 kitty_thumb_free(KITTY_THUMB_S *);
 static int	 kitty_thumb_png(KITTY_THUMB_S *);
@@ -1060,7 +1060,7 @@ kitty_cache_add(KITTY_THUMB_S *t)
     k_cache  = t;
     k_cache_n++;
     k_cache_bytes += t->bytes;
-    kitty_cache_evict();
+    kitty_cache_evict(t);
 }
 
 
@@ -1078,14 +1078,15 @@ kitty_thumb_in_use(KITTY_THUMB_S *t)
 
 
 static void
-kitty_cache_evict(void)
+kitty_cache_evict(KITTY_THUMB_S *keep)
 {
     while(k_cache_n > KITTY_CACHE_MAX_ENTRIES
 	  || k_cache_bytes > (size_t) KITTY_CACHE_MAX_BYTES){
 	KITTY_THUMB_S *t, **pp, **oldest = NULL;
 
 	for(pp = &k_cache; (t = *pp) != NULL; pp = &t->next)
-	  if(!kitty_thumb_in_use(t) && (!oldest || t->stamp < (*oldest)->stamp))
+	  if(t != keep && !kitty_thumb_in_use(t)
+	     && (!oldest || t->stamp < (*oldest)->stamp))
 	    oldest = pp;
 
 	if(!oldest)

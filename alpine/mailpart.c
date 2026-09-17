@@ -1361,7 +1361,8 @@ download_attachment(int qline, long int msgno, ATTACH_S *a)
 	return;
     }
 
-    if(downloadable_parts(&list) > 1){
+    n = downloadable_parts(&list);
+    if(n > 1){
 	rv = radio_buttons(_("Download this attachment or all of them? "),
 			   qline, which, 't', 'x', NO_HELP, RB_NORM);
 	if(rv == 'x' || rv < 0){
@@ -1374,7 +1375,6 @@ download_attachment(int qline, long int msgno, ATTACH_S *a)
     }
 
     if(all){
-	n = downloadable_parts(NULL);
 	rv = kitty_xfer_send_attachments(msgno, list, n, &nsent);
     }
     else{

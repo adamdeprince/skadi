@@ -670,6 +670,7 @@ oauth2_open_browser(char *url, char *why, size_t whylen)
 static UCS   oauth2_hook_key = 0;
 static char *oauth2_hook_code = NULL;
 static char *oauth2_hook_url = NULL;
+static unsigned long oauth2_hook_drawn_at = ~0UL;
 static char  oauth2_hook_lasterr[256];
 
 static UCS
@@ -679,10 +680,14 @@ oauth2_idle_hook(void)
     const char *err;
 
 #ifndef _WINDOWS
-    if(oauth2_hook_url && ps_global->ttyo && HEADER_ROWS(ps_global) >= 2)
-      term_hyperlink_at(HEADER_ROWS(ps_global) - 1, 0, oauth2_hook_url,
+    /* draw the link once, and again after a key may have repainted */
+    if(oauth2_hook_url && ps_global->ttyo && HEADER_ROWS(ps_global) >= 2
+       && oauth2_hook_drawn_at != read_char_key_serial()){
+	oauth2_hook_drawn_at = read_char_key_serial();
+	term_hyperlink_at(HEADER_ROWS(ps_global) - 1, 0, oauth2_hook_url,
 			_("  Sign in: click this line (Ctrl+Shift+click if the mouse is on) to open the authorization page"),
 			ps_global->ttyo->screen_cols);
+    }
 #endif
 
     if(!oauth2_loopback_active())
@@ -713,6 +718,7 @@ static void
 oauth2_hook_install(UCS key, char *url)
 {
     oauth2_hook_key = key;
+    oauth2_hook_drawn_at = ~0UL;
     oauth2_hook_lasterr[0] = '\0';
     if(oauth2_hook_code)
       fs_give((void **) &oauth2_hook_code);

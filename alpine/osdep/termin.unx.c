@@ -99,6 +99,16 @@ set_read_char_idle_hook(UCS (*hook)(void))
     read_char_idle_hook = hook;
 }
 
+/* bumped for every key read_char hands back; lets an idle hook tell
+ * a keystroke (which may have repainted the screen) from a timeout */
+static unsigned long read_char_key_serial_n = 0;
+
+unsigned long
+read_char_key_serial(void)
+{
+    return(read_char_key_serial_n);
+}
+
 
 /*
  * Internal prototypes
@@ -638,6 +648,9 @@ read_char(int time_out)
 
 
       done:
+	if(ch != NO_OP_COMMAND && ch != NO_OP_IDLE)
+	  read_char_key_serial_n++;
+
 #ifdef	DEBUG
 	if(ps_global->conceal_sensitive_debugging && debug < 10){
 	    dprint((9, "Read char returning: <hidden char>\n"));

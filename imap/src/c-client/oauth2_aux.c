@@ -316,9 +316,11 @@ oauth2_loopback_start(OAUTH2_S *oauth2)
     oa2_lb_done = 0;
     oa2_lb_set_error(NULL);
 
+    /*
+     * old is either the provider's static default or the loopback URI
+     * we installed on an earlier try; both pass the loopback check.
+     */
     old = oauth2->param[OA2_Redirect].value;
-    if(old == oa2_lb_redirect && oa2_lb_redirect)	/* ours from a previous try */
-      old = NULL;
 
     if(!oa2_lb_is_loopback_uri(old))
       return(0);
@@ -344,9 +346,11 @@ oauth2_loopback_start(OAUTH2_S *oauth2)
 
     snprintf(redir, sizeof(redir), "http://%s:%u/", host, oa2_lb_port);
 
-    if(oa2_lb_redirect)
-      fs_give((void **) &oa2_lb_redirect);
-
+    /*
+     * The previous string is deliberately not freed: an OAUTH2_S for
+     * another account signed in earlier this session may still point
+     * at it.  One short string per authorization attempt is nothing.
+     */
     oa2_lb_redirect = cpystr(redir);
     /* the provider's default is a static string; never free that */
     oauth2->param[OA2_Redirect].value = oa2_lb_redirect;

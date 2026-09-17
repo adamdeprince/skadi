@@ -1672,7 +1672,8 @@ kitty_notify(char *title, char *body)
       return;
 
     buf[sizeof(buf) - 1] = '\0';
-    for(p = buf + 17; *p; p++)
+    p = strchr(buf + 3, ';');		/* the metadata/payload separator */
+    for(p = p ? p + 1 : buf; *p; p++)
       if((unsigned char) *p < 0x20 || *p == 0x7f || *p == ';')
 	*p = ' ';
 

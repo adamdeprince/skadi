@@ -1878,6 +1878,7 @@ pine_send(ENVELOPE *outgoing, struct mail_bodystruct **body,
      * already carries markup, or when the user asked for it; otherwise
      * markup commands or the toggle turn it on.
      */
+    html_forget_composed_text();
     htmlfmt_set_mode(html_compose_start_html
 		       ? HTMLFMT_ON
 		       : (F_ON(F_COMPOSE_HTML_DEFAULT, ps_global)
@@ -4132,6 +4133,7 @@ pine_send(ENVELOPE *outgoing, struct mail_bodystruct **body,
             /*----- Mail Post FAILED, back to composer -----*/
             if(result & (P_MAIL_LOSE | P_FCC_LOSE)){
 		dprint((1, "Send failed, continuing\n"));
+		(void) html_restore_composed_text(body);
 
 		if(result & P_FCC_LOSE){
 		    /*

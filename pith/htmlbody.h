@@ -44,4 +44,7 @@ int	 html_find_cid_refs(char *, char ***);
 int	 html_new_cid(char *, size_t);
 
 
+int	 html_restore_composed_text(struct mail_bodystruct **);
+void	 html_forget_composed_text(void);
+
 #endif /* PITH_HTMLBODY_INCLUDED */
