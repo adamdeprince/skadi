@@ -1545,7 +1545,7 @@ pico_looks_like_path(char *s)
       return(1);
 #endif
 
-    return(strchr(s, '/') != NULL);
+    return(0);
 }
 
 
@@ -1745,8 +1745,8 @@ pico_consume_paste_if_attach(void)
 	int is_tmp = 0;
 
 	if(pico_resolve_attach_path(utf8, fn, sizeof(fn), &is_tmp)){
-	    (void) AppendAttachment(fn, NULL, NULL, is_tmp);
-	    attached = 1;
+	    if(AppendAttachment(fn, NULL, NULL, is_tmp) == 0)
+	      attached = 1;
 	}
     }
     if(!attached){
@@ -1801,14 +1801,13 @@ pico_consume_paste_if_attach(void)
 		if(*p){
 		    int is_tmp = 0;
 
-		    if(pico_resolve_attach_path(p, fn, sizeof(fn), &is_tmp))
-		      (void) AppendAttachment(fn, NULL, NULL, is_tmp);
+		    if(pico_resolve_attach_path(p, fn, sizeof(fn), &is_tmp)
+		       && AppendAttachment(fn, NULL, NULL, is_tmp) == 0)
+		      attached = 1;
 		}
 
 		p = next;
 	    }
-
-	    attached = 1;
 	}
     }
 
