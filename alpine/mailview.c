@@ -342,13 +342,6 @@ mail_view_screen(struct pine *ps)
 
 	view_writec_destroy();
 
-	if(kitty_img_count() > 0){
-	    kitty_img_paint_text((char *) so_text(store),
-				 SCROLL_LINES_ABOVE(ps),
-				 SCROLL_LINES(ps), handles);
-	    clear_cursor_pos();
-	}
-
 	last_message_viewed  = mn_get_cur(ps->msgmap);
 	last_was_full_header = ps->full_header;
 
@@ -1119,6 +1112,28 @@ scroll_handle_launch(HANDLE_S *handle, int force)
 	  display_vevent_summary(mn_m2raw(ps_global->msgmap, mn_get_cur(ps_global->msgmap)),
 			     handle->h.ical.attach, 
 			     DA_FROM_VIEW | DA_DIDPROMPT, handle->h.ical.depth);
+	break;
+
+      case IMG:
+	{
+	    ATTACH_S *ia = handle->h.img.attach;
+
+	    if(!ia && handle->h.img.src)
+	      ia = kitty_img_attach_for_cid(handle->h.img.src);
+
+	    if(ia){
+		flags = DA_FROM_VIEW | DA_DIDPROMPT;
+		switch(scroll_handle_prompt(handle, force)){
+		   case  1 : break;
+		   case -2 : flags |= DA_ALLIMAGES;
+		   case -1 : flags |= DA_EXTERNAL; break;
+		   default : return -1;
+		}
+
+		display_attachment(mn_m2raw(ps_global->msgmap,
+					    mn_get_cur(ps_global->msgmap)), ia, flags);
+	    }
+	}
 	break;
 
       case imgData:
@@ -4183,7 +4198,7 @@ redraw_scroll_text(void)
     if(kitty_img_count() > 0){
 	kitty_img_paint_lines(st->text_lines, st->line_lengths, offset,
 			      st->screen.start_line, st->screen.length,
-			      st->parms->text.handles);
+			      st->num_lines, st->parms->text.handles);
 	clear_cursor_pos();
     }
 
@@ -4658,6 +4673,7 @@ scroll_scroll_text(long int new_top_line, HANDLE_S *handle, int redraw)
 
 	    kitty_img_paint_lines(st->text_lines, st->line_lengths, off,
 				  st->screen.start_line, st->screen.length,
+				  st->num_lines,
 				  handle ? handle : st->parms->text.handles);
 	    clear_cursor_pos();
 	}

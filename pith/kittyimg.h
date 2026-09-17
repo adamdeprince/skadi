@@ -23,30 +23,30 @@
 /*
  * Inline image support for the message viewer.
  *
- * Images are shown as a cell-sized thumbnail (at most 32 columns by
- * 8 rows, aspect preserved).  Cell pixel size is measured so the
- * raster fills that cell box at the current resolution.  Placement
- * uses the kitty graphics protocol when the terminal supports it,
- * otherwise sixels.
- *
- * Previews are re-placed on each screen paint at the reserved blank
- * lines in the formatted text.  Every terminal size change is treated
- * as a possible resolution change and cell size is re-measured.
+ * Images are decoded in-process (stb_image), resampled to a thumbnail
+ * that fits a cell box (inline-image-max-size, default 32x8 cells) and
+ * cached across repaints, re-views and resizes.  The formatted text
+ * carries a selectable "[Image: ...]" handle line followed by the
+ * reserved blank rows; each screen paint places the thumbnails on
+ * those rows using the kitty graphics protocol, iTerm2's inline image
+ * sequence, or sixels, whichever the terminal supports.
  */
 
 
 /* exported prototypes */
-int	 kitty_img_enabled(void);
-int	 kitty_img_count(void);
-void	 kitty_img_begin_message(void);
-void	 kitty_img_end_message(void);
-void	 kitty_img_note_resize(void);
-int	 kitty_img_from_part(ATTACH_S *, long, int *, int *);
-int	 kitty_img_from_cid(char *, int *, int *);
-int	 kitty_img_from_data_uri(char *, int *, int *);
-int	 kitty_img_emit_block(gf_o_t, HANDLE_S **, int, int, int, char *);
-void	 kitty_img_paint_lines(char **, short *, long, int, int, HANDLE_S *);
-void	 kitty_img_paint_text(char *, int, int, HANDLE_S *);
+int	  kitty_img_enabled(void);
+int	  kitty_img_count(void);
+void	  kitty_img_begin_message(void);
+void	  kitty_img_end_message(void);
+void	  kitty_img_shutdown(void);
+void	  kitty_img_note_resize(void);
+int	  kitty_img_from_part(ATTACH_S *, long, int *, int *);
+int	  kitty_img_from_cid(char *, int *, int *);
+int	  kitty_img_from_data_uri(char *, int *, int *);
+ATTACH_S *kitty_img_attach_for_cid(char *);
+char	 *kitty_img_alt(char *, char *, size_t);
+int	  kitty_img_emit_block(gf_o_t, HANDLE_S **, int, int, int, ATTACH_S *, char *);
+void	  kitty_img_paint_lines(char **, short *, long, int, int, long, HANDLE_S *);
 
 
 #endif /* PITH_KITTYIMG_INCLUDED */

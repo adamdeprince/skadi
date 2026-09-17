@@ -53,9 +53,12 @@ typedef	struct handle_s {
 		 *alt,			/* image alternate text */
 		 *tool,			/* program to display data: */
 		 *file;			/* decoded local file, if any */
-	    int   kitty_id;		/* kitty graphics protocol image id */
+	    int   kitty_id;		/* inline image id, see kittyimg.c */
 	    int   rows;			/* reserved display rows */
 	    int   cols;			/* reserved display columns */
+	    ATTACH_S *attach;		/* part the image came from, if any */
+	    unsigned placed:1;		/* a kitty placement is on screen */
+	    unsigned seen:1;		/* scratch for the paint pass */
 	} img;				/* stuff to describe img */
 	ATTACH_S    *attach;		/* Attachment struct for this handle */
 	struct {

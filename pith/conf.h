@@ -61,6 +61,12 @@
 #ifndef DF_MAXREMSTREAM
 #define DF_MAXREMSTREAM 	"3"
 #endif
+#ifndef DF_INLINE_IMAGE_SIZE
+#define DF_INLINE_IMAGE_SIZE	"32x8"
+#endif
+#ifndef DF_INLINE_IMAGE_COUNT
+#define DF_INLINE_IMAGE_COUNT	"12"
+#endif
 #ifndef DF_VIEW_MARGIN_RIGHT
 #define DF_VIEW_MARGIN_RIGHT 	"4"
 #endif
@@ -252,6 +258,10 @@
 #define GLO_OVERLAP		     vars[V_OVERLAP].global_val.p
 #define VAR_MAXREMSTREAM	     vars[V_MAXREMSTREAM].current_val.p
 #define GLO_MAXREMSTREAM	     vars[V_MAXREMSTREAM].global_val.p
+#define VAR_INLINE_IMAGE_SIZE	     vars[V_INLINE_IMAGE_SIZE].current_val.p
+#define GLO_INLINE_IMAGE_SIZE	     vars[V_INLINE_IMAGE_SIZE].global_val.p
+#define VAR_INLINE_IMAGE_COUNT	     vars[V_INLINE_IMAGE_COUNT].current_val.p
+#define GLO_INLINE_IMAGE_COUNT	     vars[V_INLINE_IMAGE_COUNT].global_val.p
 #define VAR_PERMLOCKED		     vars[V_PERMLOCKED].current_val.l
 #define VAR_MARGIN		     vars[V_MARGIN].current_val.p
 #define GLO_MARGIN		     vars[V_MARGIN].global_val.p

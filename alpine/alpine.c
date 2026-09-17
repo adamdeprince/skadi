@@ -22,6 +22,7 @@
 #include "../pith/conf.h"
 #include "../pith/body.h"
 #include "../pith/offcache.h"
+#include "../pith/kittyimg.h"
 
 #include "osdep/debuging.h"
 #include "osdep/termout.gen.h"
@@ -3384,6 +3385,7 @@ goodnight_gracey(struct pine *pine_state, int exit_val)
     dprint((7, "goodnight_gracey: save offline cache\n"));
     offcache_save_all();
 
+    kitty_img_shutdown();
     dprint((7, "goodnight_gracey: sp_end\n"));
     ps_global->noshow_error = 1;
     sp_end();
