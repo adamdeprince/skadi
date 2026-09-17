@@ -86,6 +86,21 @@
 
 
 /*
+ * A caller that has to watch something besides the keyboard (the
+ * OAuth2 loopback listener, for one) installs an idle hook.  While it
+ * is installed read_char waits in one second slices and calls the hook
+ * before each wait; a non-zero return is handed back as the key.
+ */
+static UCS (*read_char_idle_hook)(void) = NULL;
+
+void
+set_read_char_idle_hook(UCS (*hook)(void))
+{
+    read_char_idle_hook = hook;
+}
+
+
+/*
  * Internal prototypes
  */
 int           pine_simple_ttgetc(int (*recorder)(int), void (*bail_handler)(void));
@@ -333,8 +348,19 @@ read_char(int time_out)
     }
 
     if(pico_paste_queued()){
-	ch = pico_paste_take();
+	ch = pico_paste_take_raw();
+	if(ch == 0)
+	  ch = NO_OP_COMMAND;
+
 	goto done;
+    }
+
+    if(read_char_idle_hook){
+	if((ch = (*read_char_idle_hook)()) != 0)
+	  goto done;
+
+	if(time_out > 1 || time_out == 0)
+	  time_out = 1;
     }
 
     if((ch = check_for_timeout(time_out)) != READY_TO_READ)
@@ -345,9 +371,8 @@ read_char(int time_out)
       case KEY_PASTE_START:
 	pico_paste_collect(pine_simple_ttgetc, key_rec, read_bail,
 			   ps_global->input_cs);
-	if(pico_paste_queued())
-	  ch = pico_paste_take();
-	else
+	ch = pico_paste_queued() ? pico_paste_take_raw() : 0;
+	if(ch == 0)
 	  ch = NO_OP_COMMAND;
 
 	goto done;
@@ -521,6 +546,13 @@ read_char(int time_out)
 	goto done;
 
       case KEY_OSC:
+      case KEY_APC:
+      case KEY_DCS:
+	/*
+	 * A reply from the terminal (colour query, graphics protocol,
+	 * device attributes) rather than a key: swallow it up to the
+	 * string terminator and pretend nothing happened.
+	 */
 	{
 	    int prev = 0;
 
@@ -529,7 +561,7 @@ read_char(int time_out)
 		  break;
 
 		ch = READ_A_CHAR();
-		if(ch == '\007')
+		if(ch == '\007' && status == KEY_OSC)
 		  break;
 
 		if(prev == '\033' && ch == '\\')
@@ -539,7 +571,7 @@ read_char(int time_out)
 	    }
 	}
 
-	ch = KEY_JUNK;
+	ch = NO_OP_COMMAND;
 	goto done;
 
       case BADESC:
@@ -549,7 +581,8 @@ read_char(int time_out)
       case 0: 	/* regular character */
       default:
 	if(status & META){
-	    ch = KEY_JUNK;
+	    /* Alt+letter only means something in the composer */
+	    ch = NO_OP_COMMAND;
 	    goto done;
 	}
 
@@ -562,8 +595,6 @@ read_char(int time_out)
 	     */
 	    ch = (status & 0xff) & 0x1f;
 	}
-	else if(status == 0x7F)
-	  ch = 0x7F;
 
 	/*
 	 * we used to strip (ch &= 0x7f;), but this seems much cleaner

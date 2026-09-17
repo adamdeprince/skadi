@@ -85,7 +85,9 @@ term_keyboard_proto(int on)
 
 /*
  * Fallback if the terminal still sends ESC then the letter for Alt
- * (kitty uses CSI u once term_keyboard_proto is on).
+ * (kitty uses CSI u once term_keyboard_proto is on).  kbseq only
+ * treats ESC + letter as one key when the letter follows within
+ * KB_ESC_MS, so Escape, a pause, then a letter stays two keys.
  */
 void
 setup_html_esc_seq(void)
@@ -104,8 +106,8 @@ setup_html_esc_seq(void)
     kpinsert("\033H", META|'h', 1);
     kpinsert("\033q", META|'q', 1);
     kpinsert("\033Q", META|'q', 1);
+    /* not \033P: that is the DCS introducer for terminal replies */
     kpinsert("\033p", META|'p', 1);
-    kpinsert("\033P", META|'p', 1);
     kpinsert("\033r", META|'r', 1);
     kpinsert("\033R", META|'r', 1);
     kpinsert("\033l", META|'l', 1);
@@ -359,6 +361,10 @@ setup_dflt_esc_seq(void)
     kpinsert("\033[200~", KEY_PASTE_START, 1);
     kpinsert("\033[201~", KEY_PASTE_END, 1);
     kpinsert("\033]", KEY_OSC, 1);
+    kpinsert("\033_", KEY_APC, 1);	/* graphics protocol replies */
+    kpinsert("\033P", KEY_DCS, 1);	/* device attributes, sixel queries */
+    kpinsert("\033^", KEY_DCS, 1);
+    kpinsert("\033X", KEY_DCS, 1);
     setup_html_esc_seq();
 }
 
@@ -1140,6 +1146,10 @@ setup_dflt_esc_seq(void)
     kpinsert("\033[200~", KEY_PASTE_START, 1);
     kpinsert("\033[201~", KEY_PASTE_END, 1);
     kpinsert("\033]", KEY_OSC, 1);
+    kpinsert("\033_", KEY_APC, 1);	/* graphics protocol replies */
+    kpinsert("\033P", KEY_DCS, 1);	/* device attributes, sixel queries */
+    kpinsert("\033^", KEY_DCS, 1);
+    kpinsert("\033X", KEY_DCS, 1);
     setup_html_esc_seq();
 }
 

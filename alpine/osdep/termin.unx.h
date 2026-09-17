@@ -23,6 +23,7 @@
 
 /* exported prototypes */
 void		tty_chmod(struct pine *, int, int);
+void		set_read_char_idle_hook(UCS (*)(void));
 
 
 
