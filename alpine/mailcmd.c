@@ -60,6 +60,8 @@
 #include "../pith/keyword.h"
 #include "../pith/stream.h"
 #include "../pith/mailcmd.h"
+#include "../pith/offcache.h"
+#include "../pith/outbox.h"
 #include "../pith/hist.h"
 #include "../pith/list.h"
 #include "../pith/icache.h"
@@ -85,6 +87,7 @@ int       cmd_bounce(struct pine *, MSGNO_S *, int, ACTION_S *);
 int       cmd_save(struct pine *, MAILSTREAM *, MSGNO_S *, int, CmdWhere);
 void      role_compose(struct pine *);
 int	  cmd_expunge(struct pine *, MAILSTREAM *, MSGNO_S *, int);
+void	  cmd_sync(struct pine *, MAILSTREAM *);
 int       cmd_export(struct pine *, MSGNO_S *, int, int);
 char	 *cmd_delete_action(struct pine *, MSGNO_S *, CmdWhere);
 char	 *cmd_delete_view(struct pine *, MSGNO_S *);
@@ -1314,6 +1317,12 @@ get_out:
 	    state->mangled_footer = 1;
 	}
 
+	break;
+
+
+          /*---------- Sync offline cache ----------*/
+      case MC_SYNC :
+	cmd_sync(state, stream);
 	break;
 
 
@@ -10318,3 +10327,44 @@ flag_submenu(mc)
 }
 
 #endif	/* _WINDOWS */
+
+
+/*----------------------------------------------------------------------
+    Sync the offline cache: from a cached folder, reopen the live folder
+    and apply the changes made offline; from a live folder, refresh the
+    cache and send anything waiting in the outbox.
+  ----*/
+void
+cmd_sync(struct pine *state, MAILSTREAM *stream)
+{
+    if(!offcache_enabled()){
+	q_status_message(SM_ORDER, 0, 3, _("The offline cache is disabled"));
+	return;
+    }
+
+    if(offcache_is_stream(stream)){
+	int pending = offcache_pending_count(stream->mailbox);
+
+	if(pending)
+	  q_status_message1(SM_ORDER, 0, 3,
+			    _("Connecting to apply %s offline change(s)..."),
+			    comatose((long) pending));
+	else
+	  q_status_message(SM_ORDER, 0, 3, _("Connecting..."));
+
+	(void) do_broach_folder(state->cur_folder, state->context_current,
+				NULL, DB_FORCELIVE);
+	return;
+    }
+
+    if(stream && offcache_cacheable_stream(stream)){
+	offcache_note_live();
+	offcache_learn_stream(stream);
+	offcache_checkpoint();
+    }
+
+    if(offcache_network_ok() && outbox_count() > 0)
+      (void) outbox_flush();
+
+    q_status_message(SM_ORDER, 0, 3, _("Offline cache is up to date"));
+}

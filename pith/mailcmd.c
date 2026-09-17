@@ -35,6 +35,7 @@
 #include "../pith/ablookup.h"
 #include "../pith/search.h"
 #include "../pith/offcache.h"
+#include "../pith/outbox.h"
 #include "../pith/charconv/utf8.h"
 
 #ifdef _WINDOWS
@@ -479,6 +480,9 @@ do_broach_folder(char *newfolder, CONTEXT_S *new_context, MAILSTREAM **streamp,
 
 	if(sp_dead_stream(ps_global->mail_stream))
 	  do_reopen++;
+
+	if(flags & DB_FORCELIVE)
+	  do_reopen++;
 	
 	/*
 	 * If it is a stream which could probably discover newmail by
@@ -783,23 +787,41 @@ do_broach_folder(char *newfolder, CONTEXT_S *new_context, MAILSTREAM **streamp,
 
     {
 	char *open_name = open_inbox ? ps_global->VAR_INBOX_PATH : expanded_file;
-	char *cache_name = NULL;
-	int   remote, has_cache, use_cache, skip_live;
+	char  full_name[MAX(MAXPATH,MAILTMPLEN)+1];
+	char *cache_key, *cache_name = NULL;
+	int   cacheable, has_cache, use_cache, skip_live, cache_first, force_live;
 
-	remote = (open_name && IS_REMOTE(open_name));
-	has_cache = remote && offcache_has_folder(open_name);
-	use_cache = 0;
-	skip_live = 0;
+	/*
+	 * Folders inside a context are relative names here; the cache is
+	 * keyed on the fully qualified name the stream will carry.
+	 */
+	if(new_context && !open_inbox && open_name
+	   && context_apply(full_name, new_context, open_name, sizeof(full_name)))
+	  cache_key = full_name;
+	else
+	  cache_key = open_name;
 
-	if(offcache_enabled() && remote){
-	    if(has_cache && !do_reopen && !offcache_network_ok())
+	cacheable = offcache_enabled() && cache_key
+		    && offcache_cacheable_name(cache_key);
+	has_cache = cacheable && offcache_has_folder(cache_key);
+	cache_first = cacheable && F_ON(F_OFFLINE_CACHE_FIRST, ps_global);
+	force_live = (flags & DB_FORCELIVE) != 0;
+	use_cache = skip_live = 0;
+
+	/*
+	 * Default policy: try the server (with a short timeout when a
+	 * cache exists) and fall back to the cache.  With the open-first
+	 * feature the cache is used until the user asks for a Sync.
+	 */
+	if(cacheable && !force_live && cache_first && !offcache_network_ok()){
+	    if(has_cache && !do_reopen)
 	      use_cache = 1;
 	    else if((flags & DB_STARTUP) && !has_cache)
 	      skip_live = 1;
 	}
 
 	if(use_cache){
-	    cache_name = offcache_name_for(open_name);
+	    cache_name = offcache_name_for(cache_key);
 	    m = pine_mail_open(stream, cache_name,
 			       openmode | (open_inbox ? SP_INBOX : 0),
 			       &rflags);
@@ -808,7 +830,7 @@ do_broach_folder(char *newfolder, CONTEXT_S *new_context, MAILSTREAM **streamp,
 
 	    if(m && !m->halfopen)
 	      q_status_message(SM_ORDER, 0, 3,
-		   _("Opened offline cache (not connected)"));
+		   _("Opened offline cache (not connected); use Sync to connect"));
 	}
 	else if(skip_live){
 	    if(we_cancel)
@@ -828,7 +850,7 @@ do_broach_folder(char *newfolder, CONTEXT_S *new_context, MAILSTREAM **streamp,
 	    void *oldto = NULL;
 	    int   shortened = 0;
 
-	    if(has_cache){
+	    if(has_cache && !force_live){
 		oldto = mail_parameters(NULL, GET_OPENTIMEOUT, NULL);
 		if(oldto && (long) oldto > 8L){
 		    mail_parameters(NULL, SET_OPENTIMEOUT, (void *) 8L);
@@ -859,8 +881,10 @@ do_broach_folder(char *newfolder, CONTEXT_S *new_context, MAILSTREAM **streamp,
 	      mail_parameters(NULL, SET_OPENTIMEOUT, oldto);
 
 	    if(m && !m->halfopen && !offcache_is_stream(m)){
-		offcache_note_live();
-		offcache_apply_dirty_flags(m);
+		if(offcache_cacheable_stream(m)){
+		    offcache_note_live();
+		    offcache_apply_pending(m);
+		}
 	    }
 	    else if((m == NULL || m->halfopen) && has_cache){
 		if(m){
@@ -868,7 +892,7 @@ do_broach_folder(char *newfolder, CONTEXT_S *new_context, MAILSTREAM **streamp,
 		    m = NULL;
 		}
 
-		cache_name = offcache_name_for(open_name);
+		cache_name = offcache_name_for(cache_key);
 		m = pine_mail_open(NULL, cache_name,
 				   openmode | (open_inbox ? SP_INBOX : 0),
 				   &rflags);
@@ -1119,6 +1143,11 @@ do_broach_folder(char *newfolder, CONTEXT_S *new_context, MAILSTREAM **streamp,
           || sp_unsorted_newmail(ps_global->mail_stream)
           || sp_need_to_rethread(ps_global->mail_stream))
       refresh_sort(ps_global->mail_stream, ps_global->msgmap, SRT_NON);
+
+    /* a live connection: send anything waiting in the outbox */
+    if(ps_global->mail_stream && !offcache_is_stream(ps_global->mail_stream)
+       && offcache_network_ok())
+      (void) outbox_flush_pending();
 
     report = new_messages_string(ps_global->mail_stream);
     fname = folder_name_decoded((unsigned char *)newfolder);
@@ -1482,8 +1511,10 @@ expunge_and_close(MAILSTREAM *stream, char **final_msg, long unsigned int flags)
     if(!(stream && sp_flagged(stream, SP_LOCKED)))
       stream = NULL;
 
-    if(stream)
-      offcache_learn_stream(stream);
+    if(stream){
+	offcache_learn_stream(stream);
+	offcache_checkpoint();
+    }
 
     /* check for dead stream */
     if(stream && sp_dead_stream(stream)){
