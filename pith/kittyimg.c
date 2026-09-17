@@ -1,6 +1,6 @@
 /*
  * ========================================================================
- * Copyright 2026 Eduardo Chappa
+ * Copyright 2026 Adam DePrince
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -1671,7 +1671,7 @@ kitty_delete_id(unsigned int id, int free_data)
     char ctrl[80];
 
     snprintf(ctrl, sizeof(ctrl), "a=d,d=%c,i=%u,q=2",
-	     free_data ? 'i' : 'I', id);
+	     free_data ? 'I' : 'i', id);
     kitty_write_apc(ctrl, NULL);
 }
 
