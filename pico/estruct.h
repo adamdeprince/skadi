@@ -340,6 +340,7 @@ typedef struct lmlist {
 	char *fname;
 	char  size[32];
 	unsigned is_tmp:1;		/* fname is a temp file we created */
+	char *dispname;			/* name on the client for a temp file */
 	struct lmlist *next;
 }	LMLIST;
 

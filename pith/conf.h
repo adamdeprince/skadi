@@ -312,6 +312,7 @@
 #define VAR_UPLOAD_CMD_PREFIX	     vars[V_UPLOAD_CMD_PREFIX].current_val.p
 #define VAR_DOWNLOAD_CMD	     vars[V_DOWNLOAD_CMD].current_val.p
 #define VAR_DOWNLOAD_CMD_PREFIX	     vars[V_DOWNLOAD_CMD_PREFIX].current_val.p
+#define VAR_KITTY_DOWNLOAD_DIR	     vars[V_KITTY_DOWNLOAD_DIR].current_val.p
 #define VAR_GOTO_DEFAULT_RULE	     vars[V_GOTO_DEFAULT_RULE].current_val.p
 #define GLO_GOTO_DEFAULT_RULE	     vars[V_GOTO_DEFAULT_RULE].global_val.p
 #define VAR_MAILCAP_PATH	     vars[V_MAILCAP_PATH].current_val.p

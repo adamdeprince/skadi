@@ -146,11 +146,23 @@ struct on_display {
 /*
  * Structure to handle attachments
  */
+/*
+ * A file pulled from the terminal's machine by the term_fetch callback:
+ * a local temporary copy plus the name it had on the client.
+ */
+typedef struct pico_fetched {
+    char *path;				/* local temporary file */
+    char *name;				/* base name on the client */
+    long  size;
+    struct pico_fetched *next;
+} PICO_FETCHED;
+
 typedef struct pico_atmt {
     char *description;			/* attachment description */
     char *filename;			/* file/pseudonym for attachment */
     char *size;				/* size of attachment */
     char *id;				/* attachment id */
+    char *dispname;			/* name to give the part when filename is a temp */
     unsigned short flags;
     struct pico_atmt *next;
 } PATMT;
@@ -226,7 +238,7 @@ typedef struct pico_struct {
 					/* callback to rcv uploaded text */
     int   (*upload)(char *, size_t, long *);
 					/* fetch a file from the local terminal */
-    int   (*term_fetch)(char *, char *, size_t, long *);
+    int   (*term_fetch)(char *, PICO_FETCHED **);
 					/* callback for checkpoint file dir */
     char *(*ckptdir)(char *, size_t);
 					/* callback to verify exit request */

@@ -34,14 +34,17 @@ int    pico_hexval(int);
 void   pico_pct_decode(char *);
 int    pico_looks_like_path(char *);
 int    pico_normalize_pasted_path(char *, char *, size_t);
-int    pico_pasted_path_file(char *, char *, size_t);
 int    pico_kitty_path(char *, char *, size_t);
-int    pico_resolve_attach_path(char *, char *, size_t, int *);
+int    pico_resolve_attach_path(char *, char *, size_t, PICO_FETCHED **);
+int    pico_attach_fetched(PICO_FETCHED *);
+LMLIST *pico_lmlist_from_fetched(PICO_FETCHED *);
+static int pico_attach_resolved(char *);
 
 
 #define	HIBIT_WARN	"Only ASCII characters allowed in attachment comments"
 
 int pico_next_attach_tmp = 0;
+char *pico_next_attach_name = NULL;
 
 
 /*
@@ -248,6 +251,7 @@ AskAttach(char *cmnt, size_t cmntlen, LMLIST **lm)
 		strncpy(new->size, sz, sizeof(new->size)-1);
 		new->size[sizeof(new->size)-1] = '\0';
 		new->is_tmp = 0;
+		new->dispname = NULL;
 		new->next = NULL;
 		*lm = new;
 
@@ -348,47 +352,44 @@ AskAttach(char *cmnt, size_t cmntlen, LMLIST **lm)
 		    }
 
 		    if(fn[0]){
-			int  is_tmp = 0;
-
 			if(from_client){
-			    char fetched[NLINE];
-			    long nbytes = 0;
-			    int  fr = 0;
+			    PICO_FETCHED *fl = NULL;
+			    int		  fr;
 
-			    fetched[0] = '\0';
 			    if(!(Pmaster && Pmaster->term_fetch)){
-				emlwwrite(_("Client attach needs kitty"), NULL);
+				emlwwrite(_("Client attach needs kitty file transfer"), NULL);
 				return(0);
 			    }
 
-			    fr = (*Pmaster->term_fetch)(fn, fetched,
-							sizeof(fetched),
-							&nbytes);
-			    if(fr == 1 && fetched[0]){
-				strncpy(fn, fetched, sizeof(fn)-1);
-				fn[sizeof(fn)-1] = '\0';
-				attsz = (off_t) nbytes;
-				is_tmp = 1;
-			    }
-			    else if(fr < 0){
-				emlwrite(_("Attach cancelled"), NULL);
-				return(0);
+			    fr = (*Pmaster->term_fetch)(fn, &fl);
+			    if(fr == 1 && fl){
+				*lm = pico_lmlist_from_fetched(fl);
+				pico_free_fetched(&fl);
+				if(!*lm){
+				    emlwwrite(_("Can't malloc space for filename"), NULL);
+				    return(-1);
+				}
 			    }
 			    else{
-				emlwwrite(_("Can't fetch that client file"), NULL);
+				if(fr < 0)
+				  emlwrite(_("Attach cancelled"), NULL);
+				else
+				  emlwwrite(_("Can't fetch that from the client"), NULL);
+
 				return(0);
 			    }
 			}
-			else if((gmode & MDTREE)
-			   && !compresspath(opertree, fn, sizeof(fn))){
-			    eml.s = (gmode&MDSCUR) ? _("home directory") : opertree;
-			    emlwrite(
+			else{
+			    if((gmode & MDTREE)
+			       && !compresspath(opertree, fn, sizeof(fn))){
+				eml.s = (gmode&MDSCUR) ? _("home directory") : opertree;
+				emlwrite(
 	    /* TRANSLATORS: the %s is replaced with the name of a directory */
 	    _("Restricted mode allows attachments from %s only: too many ..'s"),
-				 &eml);
-			    return(0);
-			}
-			else{
+				     &eml);
+				return(0);
+			    }
+
 			    fixpath(fn, sizeof(fn));	/* names relative to ~ */
 			    if((gmode&MDTREE) && !in_oper_tree(fn)){
 				eml.s = (gmode&MDSCUR) ? _("home directory") : opertree;
@@ -401,23 +402,24 @@ AskAttach(char *cmnt, size_t cmntlen, LMLIST **lm)
 				fioperr(status, fn);
 				return(0);
 			    }
-			}
 
-			len = strlen(fn);
-			if((new=(LMLIST *)malloc(sizeof(*new))) == NULL
-			   || (new->fname=malloc((len+1)*sizeof(char))) == NULL){
-			    emlwwrite(_("Can't malloc space for filename"), NULL);
-			    return(-1);
-			}
+			    len = strlen(fn);
+			    if((new=(LMLIST *)malloc(sizeof(*new))) == NULL
+			       || (new->fname=malloc((len+1)*sizeof(char))) == NULL){
+				emlwwrite(_("Can't malloc space for filename"), NULL);
+				return(-1);
+			    }
 
-			new->dir = NULL;
-			new->is_tmp = is_tmp ? 1 : 0;
-			strncpy(new->fname, fn, len);
-			new->fname[len] = '\0';
-			strncpy(new->size, prettysz(attsz), sizeof(new->size));
-			new->size[sizeof(new->size)-1] = '\0';
-			new->next = NULL;
-			*lm = new;
+			    new->dir = NULL;
+			    new->is_tmp = 0;
+			    new->dispname = NULL;
+			    strncpy(new->fname, fn, len);
+			    new->fname[len] = '\0';
+			    strncpy(new->size, prettysz(attsz), sizeof(new->size));
+			    new->size[sizeof(new->size)-1] = '\0';
+			    new->next = NULL;
+			    *lm = new;
+			}
 		    }
 		    else
 		      return(AttachCancel((upload && i == 1) ? fn : NULL));
@@ -1388,6 +1390,12 @@ NewAttach(char *f, long l, char *c)
     if(pico_next_attach_tmp)
       tp->flags |= A_TMP;
 
+    if(pico_next_attach_name && pico_next_attach_name[0]){
+	tp->dispname = (char *) malloc(strlen(pico_next_attach_name) + 1);
+	if(tp->dispname)
+	  strcpy(tp->dispname, pico_next_attach_name);
+    }
+
     /* callback to show user the mime type that will be used for attachment */
     if(Pmaster->mimetype  && (*Pmaster->mimetype)(f) > 0){
 	int rv ;
@@ -1471,6 +1479,9 @@ ZotAttach(PATMT *p)
 
     if(p->size)
       free((char *)p->size);
+
+    if(p->dispname)
+      free((char *)p->dispname);
 
     if(p->id)
       free((char *)p->id);
@@ -1587,9 +1598,9 @@ pico_normalize_pasted_path(char *src, char *dst, size_t dstlen)
 	p += 7;
 	if(!strncmp(p, "localhost", 9))
 	  p += 9;
-    }
 
-    pico_pct_decode(p);
+	pico_pct_decode(p);		/* only URLs are percent-encoded */
+    }
 
     d = dst;
     while(*p && (size_t) (d - dst) < dstlen - 1){
@@ -1648,9 +1659,9 @@ pico_kitty_path(char *src, char *dst, size_t dstlen)
 	p += 7;
 	if(!strncmp(p, "localhost", 9))
 	  p += 9;
-    }
 
-    pico_pct_decode(p);
+	pico_pct_decode(p);		/* only URLs are percent-encoded */
+    }
 
     d = dst;
     while(*p && (size_t) (d - dst) < dstlen - 1){
@@ -1672,21 +1683,117 @@ pico_kitty_path(char *src, char *dst, size_t dstlen)
 }
 
 
+/*
+ * pico_free_fetched - release a list handed back by term_fetch (it was
+ * built with malloc/strdup on the Alpine side)
+ */
+void
+pico_free_fetched(PICO_FETCHED **listp)
+{
+    PICO_FETCHED *f, *next;
+
+    if(!listp)
+      return;
+
+    for(f = *listp; f; f = next){
+	next = f->next;
+	if(f->path)
+	  free(f->path);
+
+	if(f->name)
+	  free(f->name);
+
+	free(f);
+    }
+
+    *listp = NULL;
+}
+
+
+/*
+ * pico_lmlist_from_fetched - LMLIST entries (temp file, client name)
+ * for everything the client sent.  NULL when out of memory.
+ */
+LMLIST *
+pico_lmlist_from_fetched(PICO_FETCHED *fl)
+{
+    LMLIST *head = NULL, **tail = &head, *new;
+
+    for(; fl; fl = fl->next){
+	if(!fl->path || !fl->path[0])
+	  continue;
+
+	new = (LMLIST *) malloc(sizeof(*new));
+	if(!new)
+	  break;
+
+	memset(new, 0, sizeof(*new));
+	new->fname = strdup(fl->path);
+	if(!new->fname){
+	    free(new);
+	    break;
+	}
+
+	new->dispname = (fl->name && fl->name[0]) ? strdup(fl->name) : NULL;
+	new->is_tmp = 1;
+	strncpy(new->size, prettysz((off_t) fl->size), sizeof(new->size) - 1);
+	new->size[sizeof(new->size) - 1] = '\0';
+	*tail = new;
+	tail = &new->next;
+    }
+
+    return(head);
+}
+
+
+/*
+ * pico_attach_fetched - append every fetched file to the attachment
+ * list; the client name becomes the part's name and its comment.
+ * Returns the number attached.
+ */
 int
-pico_resolve_attach_path(char *raw, char *fn, size_t fnlen, int *is_tmp)
+pico_attach_fetched(PICO_FETCHED *fl)
+{
+    int n = 0;
+
+    for(; fl; fl = fl->next){
+	if(!fl->path || !fl->path[0])
+	  continue;
+
+	pico_next_attach_name = fl->name;
+	if(AppendAttachment(fl->path, NULL, fl->name, 1) == 0)
+	  n++;
+
+	pico_next_attach_name = NULL;
+    }
+
+    return(n);
+}
+
+
+/*
+ * pico_resolve_attach_path - decide what a typed or pasted path names.
+ * The raw text has to look like a path before it is touched (relative
+ * names are never treated as paths, so ordinary prose with slashes is
+ * left alone).  Returns 1 with fn set for a readable host file, 2 with
+ * *fetched set for files pulled from the client, 0 for neither, and -1
+ * when the user cancelled a client transfer.
+ */
+int
+pico_resolve_attach_path(char *raw, char *fn, size_t fnlen, PICO_FETCHED **fetched)
 {
     off_t sz = 0;
     char  remote[NLINE];
-    long  nbytes = 0;
     int   fr;
 
-    if(is_tmp)
-      *is_tmp = 0;
+    if(fetched)
+      *fetched = NULL;
 
-    if(!pico_normalize_pasted_path(raw, fn, fnlen))
+    if(!pico_kitty_path(raw, remote, sizeof(remote))
+       || !pico_looks_like_path(remote))
       return(0);
 
-    if(!pico_looks_like_path(fn))
+    if(!pico_normalize_pasted_path(raw, fn, fnlen))
       return(0);
 
     if(fexist(fn, "r", &sz) == FIOSUC){
@@ -1696,37 +1803,55 @@ pico_resolve_attach_path(char *raw, char *fn, size_t fnlen, int *is_tmp)
 	return(1);
     }
 
-    if((gmode & (MDTREE | MDSCUR)) || !(Pmaster && Pmaster->term_fetch))
+    if((gmode & (MDTREE | MDSCUR)) || !(Pmaster && Pmaster->term_fetch)
+       || !fetched)
       return(0);
 
-    if(!pico_kitty_path(raw, remote, sizeof(remote)))
-      return(0);
+    fr = (*Pmaster->term_fetch)(remote, fetched);
+    if(fr == 1 && *fetched)
+      return(2);
 
-    fr = (*Pmaster->term_fetch)(remote, fn, fnlen, &nbytes);
-    if(fr == 1 && fn[0]){
-	if(is_tmp)
-	  *is_tmp = 1;
+    if(*fetched)
+      pico_free_fetched(fetched);
 
-	return(1);
+    return(fr < 0 ? -1 : 0);
+}
+
+
+/* attach whatever one pasted line resolves to; returns the count */
+static int
+pico_attach_resolved(char *line)
+{
+    PICO_FETCHED *fl = NULL;
+    char	  fn[NLINE];
+    int		  rv, n = 0;
+
+    rv = pico_resolve_attach_path(line, fn, sizeof(fn), &fl);
+    if(rv == 1){
+	if(AppendAttachment(fn, NULL, NULL, 0) == 0)
+	  n = 1;
+    }
+    else if(rv == 2){
+	n = pico_attach_fetched(fl);
+	pico_free_fetched(&fl);
     }
 
-    return(0);
+    return(n);
 }
 
 
-int
-pico_pasted_path_file(char *raw, char *fn, size_t fnlen)
-{
-    return(pico_resolve_attach_path(raw, fn, fnlen, NULL));
-}
-
-
+/*
+ * pico_consume_paste_if_attach - a bracketed paste that is nothing but
+ * file paths attaches those files instead of inserting the text.  The
+ * paste is discarded only when at least one file was attached; a paste
+ * that looks like paths but attaches nothing stays as text.
+ */
 int
 pico_consume_paste_if_attach(void)
 {
     UCS  *u;
-    int   n, attached = 0;
-    char *utf8, *p, *next, fn[NLINE];
+    int   n, attached = 0, lines = 0, ok = 0;
+    char *utf8, *p, *next, *copy;
 
     if(!(Pmaster && Pmaster->headents && pico_paste_is_fresh()))
       return(0);
@@ -1741,73 +1866,56 @@ pico_consume_paste_if_attach(void)
     if(!utf8)
       return(0);
 
-    {
-	int is_tmp = 0;
+    /* every non-blank line has to look like a path before any is tried */
+    copy = (char *) malloc(strlen(utf8) + 1);
+    if(copy){
+	strcpy(copy, utf8);
+	p = copy;
+	while(p && *p){
+	    next = strpbrk(p, "\r\n");
+	    if(next){
+		*next = '\0';
+		next++;
+		while(*next == '\r' || *next == '\n')
+		  next++;
+	    }
 
-	if(pico_resolve_attach_path(utf8, fn, sizeof(fn), &is_tmp)){
-	    if(AppendAttachment(fn, NULL, NULL, is_tmp) == 0)
-	      attached = 1;
+	    while(*p == ' ' || *p == '\t')
+	      p++;
+
+	    if(*p){
+		char probe[NLINE];
+
+		lines++;
+		if(pico_kitty_path(p, probe, sizeof(probe))
+		   && pico_looks_like_path(probe))
+		  ok++;
+	    }
+
+	    p = next;
 	}
+
+	free(copy);
     }
-    if(!attached){
-	int lines = 0, ok = 0;
-	char *copy;
 
-	copy = (char *) malloc(strlen(utf8) + 1);
-	if(copy){
-	    strcpy(copy, utf8);
-	    p = copy;
-	    while(p && *p){
-		next = strpbrk(p, "\r\n");
-		if(next){
-		    *next = '\0';
-		    next++;
-		    while(*next == '\r' || *next == '\n')
-		      next++;
-		}
-
-		while(*p == ' ' || *p == '\t')
-		  p++;
-
-		if(*p){
-		    char probe[NLINE];
-
-		    lines++;
-		    if(pico_kitty_path(p, probe, sizeof(probe))
-		       && pico_looks_like_path(probe))
-		      ok++;
-		}
-
-		p = next;
+    if(lines > 0 && ok == lines){
+	p = utf8;
+	while(p && *p){
+	    next = strpbrk(p, "\r\n");
+	    if(next){
+		*next = '\0';
+		next++;
+		while(*next == '\r' || *next == '\n')
+		  next++;
 	    }
 
-	    free(copy);
-	}
+	    while(*p == ' ' || *p == '\t')
+	      p++;
 
-	if(lines > 0 && ok == lines){
-	    p = utf8;
-	    while(p && *p){
-		next = strpbrk(p, "\r\n");
-		if(next){
-		    *next = '\0';
-		    next++;
-		    while(*next == '\r' || *next == '\n')
-		      next++;
-		}
+	    if(*p)
+	      attached += pico_attach_resolved(p);
 
-		while(*p == ' ' || *p == '\t')
-		  p++;
-
-		if(*p){
-		    int is_tmp = 0;
-
-		    if(pico_resolve_attach_path(p, fn, sizeof(fn), &is_tmp)
-		       && AppendAttachment(fn, NULL, NULL, is_tmp) == 0)
-		      attached = 1;
-		}
-
-		p = next;
-	    }
+	    p = next;
 	}
     }
 
@@ -1815,7 +1923,7 @@ pico_consume_paste_if_attach(void)
       pico_paste_discard();
 
     fs_give((void **) &utf8);
-    return(attached);
+    return(attached > 0);
 }
 #endif	/* ATTACHMENTS */
 

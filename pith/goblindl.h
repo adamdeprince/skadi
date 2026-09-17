@@ -19,11 +19,10 @@
 
 
 /*
- * Move attachments through the terminal with kitty's file transfer
- * protocol (OSC 5113).  Download is a kitty send (Alpine to the
- * machine running kitty).  Upload is a kitty receive (local file
- * into Alpine).  If kitty is not available, download falls back to
- * OSC 777 goblin-download, then Save.
+ * Move files through the terminal with kitty's file transfer protocol
+ * (OSC 5113).  "Send" moves data from the machine running Alpine to
+ * the machine running kitty; "receive" pulls a client file into Alpine.
+ * Availability is probed once per session with XTVERSION.
  */
 
 #define	GOBLIN_DL_OK		0
@@ -32,13 +31,23 @@
 #define	GOBLIN_DL_CANCEL	3
 
 
+/* a file received from the client: local temp copy plus its client name */
+typedef struct kitty_file {
+    char	     *path;		/* local temporary file, caller unlinks */
+    char	     *name;		/* base name on the client */
+    long	      size;
+    struct kitty_file *next;
+} KITTY_FILE_S;
+
+
 /* exported prototypes */
-int	 goblin_dl_attachment(long, ATTACH_S *);
 int	 kitty_xfer_available(void);
+char	*kitty_xfer_terminal(void);
 int	 kitty_xfer_send_attachment(long, ATTACH_S *);
+int	 kitty_xfer_send_attachments(long, ATTACH_S **, int, int *);
 int	 kitty_xfer_send_path(char *, char *);
-int	 kitty_xfer_receive(char *, char **, long *);
-void	 goblin_write_osc(const char *);
+int	 kitty_xfer_receive(char *, KITTY_FILE_S **);
+void	 kitty_free_files(KITTY_FILE_S **);
 void	 kitty_notify(char *, char *);
 
 

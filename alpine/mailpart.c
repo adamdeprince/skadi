@@ -1293,10 +1293,46 @@ alpine_xfer_where(char *what, int qline)
 }
 
 
+/*
+ * every part of the current message that can go out as a file
+ */
+static int
+downloadable_parts(ATTACH_S ***listp)
+{
+    ATTACH_S *a, **list;
+    int	      n = 0;
+
+    if(listp)
+      *listp = NULL;
+
+    for(a = ps_global->atmts; a && a->description; a++)
+      if(a->number && a->body && a->body->type != TYPEMULTIPART)
+	n++;
+
+    if(n && listp){
+	list = (ATTACH_S **) fs_get((size_t) n * sizeof(ATTACH_S *));
+	n = 0;
+	for(a = ps_global->atmts; a && a->description; a++)
+	  if(a->number && a->body && a->body->type != TYPEMULTIPART)
+	    list[n++] = a;
+
+	*listp = list;
+    }
+
+    return(n);
+}
+
+
 void
 download_attachment(int qline, long int msgno, ATTACH_S *a)
 {
-    int rv;
+    ATTACH_S **list = NULL;
+    int	       rv, n = 1, nsent = 0, all = 0;
+    static ESCKEY_S which[] = {
+	{'t', 't', "T", N_("This one")},
+	{'a', 'a', "A", N_("All")},
+	{-1, 0, NULL, NULL}
+    };
 
     if(ps_global->restricted){
 	q_status_message(SM_ORDER | SM_DING, 0, 4,
@@ -1306,6 +1342,13 @@ download_attachment(int qline, long int msgno, ATTACH_S *a)
 
     if(!(a && a->number))
       return;
+
+    if(!kitty_xfer_available()){
+	q_status_message(SM_ORDER, 0, 3,
+	   _("This terminal has no kitty file transfer; saving on this machine"));
+	save_attachment_on_host(qline, msgno, a);
+	return;
+    }
 
     rv = alpine_xfer_where(_("Download"), qline);
     if(rv == XFER_CANCEL){
@@ -1318,12 +1361,39 @@ download_attachment(int qline, long int msgno, ATTACH_S *a)
 	return;
     }
 
-    rv = kitty_xfer_send_attachment(msgno, a);
+    if(downloadable_parts(&list) > 1){
+	rv = radio_buttons(_("Download this attachment or all of them? "),
+			   qline, which, 't', 'x', NO_HELP, RB_NORM);
+	if(rv == 'x' || rv < 0){
+	    cmd_cancelled(_("Download"));
+	    fs_give((void **) &list);
+	    return;
+	}
+
+	all = (rv == 'a');
+    }
+
+    if(all){
+	n = downloadable_parts(NULL);
+	rv = kitty_xfer_send_attachments(msgno, list, n, &nsent);
+    }
+    else{
+	rv = kitty_xfer_send_attachment(msgno, a);
+	nsent = (rv == GOBLIN_DL_OK) ? 1 : 0;
+    }
+
+    if(list)
+      fs_give((void **) &list);
+
     switch(rv){
       case GOBLIN_DL_OK :
-	q_status_message1(SM_ORDER, 0, 4,
-			  _("Part %s sent to the client via kitty"),
-			  a->number);
+	if(all)
+	  q_status_message1(SM_ORDER, 0, 4,
+			    _("%s attachments sent to the client via kitty"),
+			    comatose((long) nsent));
+	else
+	  q_status_message1(SM_ORDER, 0, 4,
+			    _("Part %s sent to the client via kitty"), a->number);
 	break;
 
       case GOBLIN_DL_CANCEL :
@@ -1332,12 +1402,17 @@ download_attachment(int qline, long int msgno, ATTACH_S *a)
 
       case GOBLIN_DL_UNSUPPORTED :
 	q_status_message(SM_ORDER | SM_DING, 0, 4,
-			 _("Client download needs kitty file transfer"));
+		 _("The terminal did not answer the transfer request"));
 	break;
 
       default :
-	q_status_message1(SM_ORDER | SM_DING, 3, 4,
-			  _("Download of part %s failed"), a->number);
+	if(all)
+	  q_status_message2(SM_ORDER | SM_DING, 3, 4,
+			    _("Download stopped after %s of %s attachments"),
+			    comatose((long) nsent), long2string((long) n));
+	else
+	  q_status_message1(SM_ORDER | SM_DING, 3, 4,
+			    _("Download of part %s failed"), a->number);
 	break;
     }
 }
@@ -1354,7 +1429,8 @@ save_attachment(int qline, long int msgno, ATTACH_S *a)
         return;
     }
 
-    where = alpine_xfer_where(_("Save"), qline);
+    where = kitty_xfer_available() ? alpine_xfer_where(_("Save"), qline)
+				   : XFER_HOST;
     if(where == XFER_CANCEL){
 	cmd_cancelled(_("Save"));
 	return;
@@ -1412,7 +1488,8 @@ export_attachment(int qline, long int msgno, ATTACH_S *a)
         return;
     }
 
-    where = alpine_xfer_where(_("Export"), qline);
+    where = kitty_xfer_available() ? alpine_xfer_where(_("Export"), qline)
+				   : XFER_HOST;
     if(where == XFER_CANCEL){
 	cmd_cancelled(_("Export"));
 	return;
@@ -2055,34 +2132,11 @@ void
 print_attachment(int qline, long int msgno, ATTACH_S *a)
 {
     char prompt[250];
-    int where;
 
     if(ps_global->restricted){
         q_status_message(SM_ORDER | SM_DING, 0, 4,
 			 "Alpine demo can't Print attachments");
         return;
-    }
-
-    where = alpine_xfer_where(_("Print"), qline);
-    if(where == XFER_CANCEL){
-	cmd_cancelled(_("Print"));
-	return;
-    }
-
-    if(where == XFER_CLIENT){
-	int rv = kitty_xfer_send_attachment(msgno, a);
-
-	if(rv == GOBLIN_DL_OK)
-	  q_status_message1(SM_ORDER, 0, 4,
-			    _("Part %s sent to the client via kitty"),
-			    a->number);
-	else if(rv == GOBLIN_DL_CANCEL)
-	  cmd_cancelled(_("Print"));
-	else
-	  q_status_message(SM_ORDER | SM_DING, 0, 3,
-			   _("Client print needs kitty file transfer"));
-
-	return;
     }
 
     snprintf(prompt, sizeof(prompt), "attach%s %s",

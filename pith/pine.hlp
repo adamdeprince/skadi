@@ -650,13 +650,17 @@ Additions include:
      <a href="h_config_offline_cache"><!--#echo var="FEAT_enable-offline-cache"--></a>
      (enabled by default).
 
-<LI> Attachment download and composer attach can use either the Alpine
-     host or the kitty client. Download (<TT>L</TT>) asks
-     <TT>Client</TT> or <TT>Host</TT>: Client sends the part to
-     <TT>~/Downloads</TT> on the machine running kitty (OSC 5113);
-     Host saves on the Alpine machine. Attach defaults to a host file;
-     press <TT>^K</TT> to switch to a client path, which kitty pulls
-     into the message. Kitty asks you to allow each client transfer.
+<LI> When the terminal is kitty (directly or over ssh), attachments can
+     move through the terminal with kitty's file transfer protocol.
+     Download (<TT>L</TT>) in the ATTACHMENT INDEX sends one part, or
+     all of them, to the directory named by
+     <a href="h_config_kitty_dl_dir"><!--#echo var="VAR_kitty-download-directory"--></a>
+     on the machine running kitty; Save and Export offer the same
+     Client or Host choice. In the composer, <TT>^K</TT> at the attach
+     prompt, or pasting a path, pulls a client file (or every file in a
+     client directory) into the message under its own name. Kitty asks
+     you to allow each transfer and <TT>^C</TT> cancels one in
+     progress. Terminals without the protocol never see these prompts.
 
 <LI> The composer accepts basic HTML markup via Alt-B/I/U (bold, italic,
      underline), Alt-L/O (bullet and numbered lists), and a few other
@@ -14672,10 +14676,17 @@ type &quot;RFC822/Message&quot;, then the attachment will be saved to
 the specified mail folder.
 
 <DT>Download</DT>
-<DD>Choose whether the file goes to the <EM>Client</EM> (the machine
-running kitty, via OSC 5113 send into <TT>~/Downloads</TT>) or the
-<EM>Host</EM> (the machine running Alpine, same as Save).  Kitty
-prompts you to allow a client transfer.
+<DD>When Alpine is running in a kitty terminal, choose whether the file
+goes to the <EM>Client</EM> (the machine running kitty, into the
+directory set by
+<A HREF="h_config_kitty_dl_dir"><!--#echo var="VAR_kitty-download-directory"--></A>,
+<TT>~/Downloads</TT> by default) or the <EM>Host</EM> (the machine
+running Alpine, same as Save). If the message has several attachments
+you may send all of them in one go. Kitty asks you to allow the
+transfer, and <TT>^C</TT> cancels it while it runs. A name that was
+already downloaded in this session gets a numbered suffix unless
+<A HREF="h_config_kitty_dl_overwrite"><!--#echo var="FEAT_kitty-download-overwrite"--></A>
+is set. In other terminals Download saves on the host.
 
 <DT>Export</DT>
 <DD>If the attachment is of
@@ -15765,7 +15776,8 @@ account's home directory.
 <!--chtml endif--><P>
 No wild card characters may be used.
 Pasting a path to an existing readable file (for example from a
-file manager) also attaches that file.
+file manager) also attaches that file. Under kitty, a pasted path that
+only exists on the machine running kitty is fetched from there.
 <P>If the 
 <A HREF="h_config_use_current_dir">&quot;<!--#echo var="FEAT_use-current-dir"-->&quot;</A>
 feature is set, names are relative to your current working directory 
@@ -15822,11 +15834,13 @@ F6
 Ctrl-J
 <!--chtml endif--> command:
 At the &quot;File to attach:&quot; prompt, enter a file on the Alpine
-host. Press ^K to switch to &quot;Client file to attach:&quot; and
-enter a path on the machine running kitty; kitty will pull that file
-into the message after you allow the transfer.
-You can also paste a path while composing: if it exists on the host it
-is attached from the host, otherwise Alpine tries the kitty client.  
+host. When the terminal is kitty, ^K switches to &quot;Client file to
+attach:&quot; where you enter a path on the machine running kitty;
+kitty pulls that file, or every file in that directory, into the
+message after you allow the transfer, and each part keeps its client
+name. ^C cancels a transfer. You can also paste a path while composing:
+if it exists on the host it is attached from the host, otherwise Alpine
+tries the kitty client.
 When the feature
 <A HREF="h_config_enable_tab_complete">&quot;<!--#echo var="FEAT_enable-tab-completion"-->&quot;</A>
 is set
@@ -23366,6 +23380,48 @@ file into which Alpine will place the message to be downloaded.
 <P><UL>
 <LI><A HREF="h_finding_help">Finding more information and requesting help</A>
 </UL><P>
+&lt;End of help on this topic&gt;
+</BODY>
+</HTML>
+====== h_config_kitty_dl_dir ======
+<HTML>
+<HEAD>
+<TITLE>OPTION: <!--#echo var="VAR_kitty-download-directory"--></TITLE>
+</HEAD>
+<BODY>
+<H1>OPTION: <!--#echo var="VAR_kitty-download-directory"--></H1>
+
+When Alpine runs inside a kitty terminal (directly or over ssh), the
+Download command in the ATTACHMENT INDEX can send an attachment to the
+machine running kitty. This option names the directory on that machine
+where the file is written. A leading <TT>~/</TT> refers to the home
+directory of the user running kitty.
+<P>
+The default is <TT>~/Downloads</TT>.
+<P>
+See also <A HREF="h_config_kitty_dl_overwrite">FEATURE: <!--#echo var="FEAT_kitty-download-overwrite"--></A>.
+<P>
+&lt;End of help on this topic&gt;
+</BODY>
+</HTML>
+====== h_config_kitty_dl_overwrite ======
+<HTML>
+<HEAD>
+<TITLE>FEATURE: <!--#echo var="FEAT_kitty-download-overwrite"--></TITLE>
+</HEAD>
+<BODY>
+<H1>FEATURE: <!--#echo var="FEAT_kitty-download-overwrite"--></H1>
+
+Alpine cannot see the files on the machine running kitty, and kitty
+replaces an existing file of the same name without asking. When this
+feature is off (the default) Alpine adds a numbered suffix such as
+<TT>report (2).pdf</TT> to any name it has already sent during this
+session, so downloading the same attachment twice keeps both copies.
+Files left over from earlier sessions can still be replaced.
+<P>
+Turn this feature on if you prefer every download to use the plain
+attachment name and replace whatever is there.
+<P>
 &lt;End of help on this topic&gt;
 </BODY>
 </HTML>

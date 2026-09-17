@@ -99,7 +99,7 @@ void	   new_thread_on_blank_subject(void);
 char      *choose_a_priority(char *);
 int        dont_flow_this_time(void);
 int	   mime_type_for_pico(char *);
-int	   term_fetch_for_pico(char *, char *, size_t, long *);
+int	   term_fetch_for_pico(char *, PICO_FETCHED **);
 char      *cancel_for_pico(void (*)(void));
 int	   filter_message_text(char *, ENVELOPE *, BODY *, STORE_S **, METAENV *);
 void	   pine_send_newsgroup_name(char *, char*, size_t);
@@ -5246,33 +5246,45 @@ mime_type_for_pico(char *file)
   Returns: TRUE on success, FALSE otherwise
 ----*/
 int
-term_fetch_for_pico(char *path, char *dst, size_t dstlen, long int *nbytes)
+term_fetch_for_pico(char *path, PICO_FETCHED **listp)
 {
-    char *out = NULL;
-    long  n = 0;
-    int   rv;
+    KITTY_FILE_S *kf = NULL, *f;
+    PICO_FETCHED *pf, **tail;
+    int		  rv;
 
-    if(nbytes)
-      *nbytes = 0;
+    if(listp)
+      *listp = NULL;
 
-    if(!path || !dst || dstlen < 2)
+    if(!path || !listp)
       return(0);
 
-    dst[0] = '\0';
-    rv = kitty_xfer_receive(path, &out, &n);
+    rv = kitty_xfer_receive(path, &kf);
     if(rv == GOBLIN_DL_CANCEL)
       return(-1);
 
-    if(rv != GOBLIN_DL_OK || !out)
+    if(rv != GOBLIN_DL_OK || !kf)
       return(0);
 
-    strncpy(dst, out, dstlen - 1);
-    dst[dstlen - 1] = '\0';
-    if(nbytes)
-      *nbytes = n;
+    tail = listp;
+    for(f = kf; f; f = f->next){
+	pf = (PICO_FETCHED *) malloc(sizeof(*pf));
+	if(!pf)
+	  break;
 
-    fs_give((void **) &out);
-    return(1);
+	memset(pf, 0, sizeof(*pf));
+	pf->path = f->path ? strdup(f->path) : NULL;
+	pf->name = f->name ? strdup(f->name) : NULL;
+	pf->size = f->size;
+	*tail = pf;
+	tail = &pf->next;
+    }
+
+    for(; f; f = f->next)			/* out of memory: drop the rest */
+      if(f->path)
+	our_unlink(f->path);
+
+    kitty_free_files(&kf);
+    return(*listp ? 1 : 0);
 }
 
 
@@ -6164,7 +6176,9 @@ create_message_body(struct mail_bodystruct **b, PATMT *attach, int flow_it)
 	p->body.type		     = TYPEOTHER;
 	p->body.encoding	     = ENCBINARY;
 	p->body.size.bytes           = name_file_size(pa->filename);
-	if(!set_mime_type_by_extension(&p->body, pa->filename)){
+	if(!set_mime_type_by_extension(&p->body,
+				       (pa->dispname && pa->dispname[0])
+					 ? pa->dispname : pa->filename)){
 	    set_mime_type_by_grope(&p->body);
 	    set_charset_possibly_to_ascii(&p->body,  ps_global->keyboard_charmap);
 	}
@@ -6188,9 +6202,11 @@ create_message_body(struct mail_bodystruct **b, PATMT *attach, int flow_it)
 	    parmp = &(*parmp)->next;
 
 	set_parameter(parmp, "name",
-		      pa->filename
-		        ? ((lc = last_cmpnt(pa->filename)) ? lc : pa->filename)
-			: NULL);
+		      (pa->dispname && pa->dispname[0])
+		        ? pa->dispname
+			: (pa->filename
+			   ? ((lc = last_cmpnt(pa->filename)) ? lc : pa->filename)
+			   : NULL));
 
 	/* Then set the Content-Disposition ala RFC1806 */
 	if(!p->body.disposition.type){
@@ -6208,9 +6224,11 @@ create_message_body(struct mail_bodystruct **b, PATMT *attach, int flow_it)
 		parmp = &(*parmp)->next;
 
 	    set_parameter(parmp, "filename",
-			  pa->filename
-			    ? ((lc = last_cmpnt(pa->filename)) ? lc : pa->filename)
-			    : NULL);
+			  (pa->dispname && pa->dispname[0])
+			    ? pa->dispname
+			    : (pa->filename
+			       ? ((lc = last_cmpnt(pa->filename)) ? lc : pa->filename)
+			       : NULL));
 	}
 
         p->next = NULL;
@@ -6292,6 +6310,9 @@ free_attachment_list(PATMT **alist)
 
 	if((*alist)->size)
           fs_give((void **)&(*alist)->size);
+
+	if((*alist)->dispname)
+          fs_give((void **)&(*alist)->dispname);
 
 	if((*alist)->id)
           fs_give((void **)&(*alist)->id);

@@ -371,6 +371,8 @@ CONF_TXT_T cf_text_download_cmd[] =	"Path and filename of the program used to do
 
 CONF_TXT_T cf_text_download_prefix[] =	"Text sent to terminal emulator prior to invoking the program defined by\n# the download-command variable.\n# Note: _FILE_ will be replaced with the temporary file used in the download.";
 
+CONF_TXT_T cf_text_kitty_dl_dir[] =	"Directory on the machine running kitty that attachments are downloaded\n# to with the Download command (default ~/Downloads).";
+
 CONF_TXT_T cf_text_goto_default[] =	"Sets the default folder and collection offered at the Goto Command's prompt.";
 
 CONF_TXT_T cf_text_mailcap_path[] =	"Sets the search path for the mailcap configuration file.\n# NOTE: colon delimited under UNIX, semi-colon delimited under DOS/Windows/OS2.";
@@ -669,6 +671,8 @@ static struct variable variables[] = {
 	NULL,			cf_text_download_cmd},
 {"download-command-prefix",		0, 1, 0, 1, 1, 0, 0, 0, 0, 1, 0,
 	NULL,			cf_text_download_prefix},
+{"kitty-download-directory",		0, 1, 0, 1, 1, 0, 0, 0, 0, 1, 0,
+	NULL,			cf_text_kitty_dl_dir},
 {"mailcap-search-path",			0, 1, 0, 1, 1, 0, 0, 0, 0, 1, 0,
 	NULL,			cf_text_mailcap_path},
 {"mimetype-search-path",		0, 1, 0, 1, 1, 0, 0, 0, 0, 1, 0,
@@ -2450,6 +2454,7 @@ init_vars(struct pine *ps, void (*cmds_f) (struct pine *, char **))
     set_current_val(&vars[V_UPLOAD_CMD_PREFIX], TRUE, TRUE);
     set_current_val(&vars[V_DOWNLOAD_CMD], TRUE, TRUE);
     set_current_val(&vars[V_DOWNLOAD_CMD_PREFIX], TRUE, TRUE);
+    set_current_val(&vars[V_KITTY_DOWNLOAD_DIR], TRUE, TRUE);
     set_current_val(&vars[V_MAILCAP_PATH], TRUE, TRUE);
     set_current_val(&vars[V_MIMETYPE_PATH], TRUE, TRUE);
 #if !defined(_WINDOWS) || defined(WINDOWS_UNIXSSL_CERTS)
@@ -3278,6 +3283,8 @@ feature_list(int index)
 	 F_FULL_AUTO_EXPUNGE, h_config_full_auto_expunge, PREF_MISC, 0},
 	{"force-arrow-cursor", NULL,
 	 F_FORCE_ARROW, h_config_force_arrow, PREF_MISC, 0},
+	{"kitty-download-overwrite", "Kitty Downloads Overwrite Existing Files",
+	 F_KITTY_DL_OVERWRITE, h_config_kitty_dl_overwrite, PREF_MISC, 0},
 	{"ignore-size-changes", NULL,
 	 F_IGNORE_SIZE, h_config_ignore_size, PREF_MISC, 0},
 	{"maildrops-preserve-state", NULL,
@@ -8063,6 +8070,8 @@ config_help(int var, int feature)
 	return(h_config_download_cmd);
       case V_DOWNLOAD_CMD_PREFIX:
 	return(h_config_download_prefix);
+      case V_KITTY_DOWNLOAD_DIR:
+	return(h_config_kitty_dl_dir);
       case V_GOTO_DEFAULT_RULE:
 	return(h_config_goto_default);
       case V_INCOMING_STARTUP:

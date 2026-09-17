@@ -822,7 +822,11 @@ HeaderEditor(int f, int n)
 
 		    (void) QuoteAttach(bfp, space);
 
-		    (void) AppendAttachment(bfp, lm->size, cmt, lmp->is_tmp);
+		    pico_next_attach_name = lmp->dispname;
+		    (void) AppendAttachment(bfp, lmp->size,
+					    cmt[0] ? cmt : lmp->dispname,
+					    lmp->is_tmp);
+		    pico_next_attach_name = NULL;
 
 		    if(bfp != buf)
 		      free(bfp);
