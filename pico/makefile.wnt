@@ -40,10 +40,10 @@ LIBER=lib
 LIBARGS=/nologo /verbose
 
 HFILES=	../include/system.h ../include/general.h \
-	ebind.h edef.h efunc.h estruct.h headers.h keydefs.h mode.h pico.h
+	ebind.h edef.h efunc.h estruct.h headers.h htmlfmt.h keydefs.h mode.h pico.h
 
 OFILES=	attach.obj basic.obj bind.obj browse.obj buffer.obj composer.obj \
-	display.obj file.obj fileio.obj line.obj pico.obj random.obj \
+	display.obj file.obj fileio.obj htmlfmt.obj line.obj pico.obj random.obj \
 	region.obj search.obj utf8stub.obj window.obj word.obj
 
 all:	blddate.exe pico.exe

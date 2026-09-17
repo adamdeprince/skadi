@@ -1,6 +1,6 @@
 /*
  * ========================================================================
- * Copyright 2026 Eduardo Chappa
+ * Copyright 2026 Adam DePrince
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,6 +13,7 @@
 #include "../pith/headers.h"
 #include "../pith/outbox.h"
 #include "../pith/state.h"
+#include "../pith/conf.h"
 #include "../pith/status.h"
 #include "../pith/store.h"
 #include "../pith/osdep/creatdir.h"
