@@ -552,6 +552,19 @@ read_char(int time_out)
 	    ch = KEY_JUNK;
 	    goto done;
 	}
+
+	if(status & CTRL){
+	    /*
+	     * The kitty keyboard protocol and xterm modifyOtherKeys
+	     * deliver Ctrl+key as CSI u; kbseq hands that back as a
+	     * CTRL status with no character.  Turn it into the C0
+	     * byte the rest of Alpine compares against.
+	     */
+	    ch = (status & 0xff) & 0x1f;
+	}
+	else if(status == 0x7F)
+	  ch = 0x7F;
+
 	/*
 	 * we used to strip (ch &= 0x7f;), but this seems much cleaner
 	 * in the face of line noise and has the benefit of making it

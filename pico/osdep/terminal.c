@@ -71,12 +71,12 @@ void
 term_keyboard_proto(int on)
 {
     if(on){
-	fputs("\033[=5u", stdout);	/* kitty: disambiguate + alternate keys */
+	fputs("\033[>5u", stdout);	/* kitty: push disambiguate + alternate keys */
 	fputs("\033[>4;2m", stdout);	/* modifyOtherKeys = 2 */
     }
     else{
-	fputs("\033[=0u", stdout);
-	fputs("\033[>4;0m", stdout);
+	fputs("\033[<u", stdout);	/* kitty: pop our flags */
+	fputs("\033[>4m", stdout);	/* modifyOtherKeys back to resource default */
     }
 
     fflush(stdout);
@@ -604,8 +604,10 @@ tinfoopen(void)
     if((gmode & MDFKEY) && Pmaster == NULL)
       puts("\033[99h");
 
-    term_bracketed_paste(1);
-    term_keyboard_proto(1);
+    if(Pmaster == NULL){
+	term_bracketed_paste(1);
+	term_keyboard_proto(1);
+    }
 
     /* return ignored */
     return(0);
@@ -1401,8 +1403,10 @@ tcapopen(void)
     if(gmode&MDFKEY && Pmaster == NULL)
       puts("\033[99h");
 
-    term_bracketed_paste(1);
-    term_keyboard_proto(1);
+    if(Pmaster == NULL){
+	term_bracketed_paste(1);
+	term_keyboard_proto(1);
+    }
 
     /* return ignored */
     return(0);

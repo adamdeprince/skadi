@@ -471,18 +471,6 @@ GetKey(void)
     if (ch >= 0x00 && ch <= 0x1F)       /* C0 control -> C-     */
       ch = CTRL | (ch+'@');
 
-    {
-	/*
-	 * Only Option-composed glyphs (∫, ç, ø, ...) become Alt+letter.
-	 * ASCII a-z here is ordinary typing — mapping those to META
-	 * turned every "o"/"c" into numbered-list / code markup.
-	 */
-	int letter = option_glyph_to_letter((int) ch);
-
-	if(letter)
-	  return(META | letter);
-    }
-
     return(ch);
 }
 
@@ -640,9 +628,6 @@ kb_map_mod_key(int key, int mod, UCS *ch)
 	*ch = (UCS) key;
 	return(0);
     }
-
-    if(letter)
-      return(META | letter);
 
     return(BADESC);
 }
