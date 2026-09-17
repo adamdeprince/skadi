@@ -21,11 +21,17 @@
 
 
 /*
- * Kitty (and compatible) inline image support for the message viewer.
+ * Inline image support for the message viewer.
  *
- * Images are decoded to a temporary PNG, transmitted once with the
- * kitty graphics protocol, and then re-placed on each screen paint
- * at the reserved blank lines in the formatted text.
+ * Images are shown as a cell-sized thumbnail (at most 32 columns by
+ * 8 rows, aspect preserved).  Cell pixel size is measured so the
+ * raster fills that cell box at the current resolution.  Placement
+ * uses the kitty graphics protocol when the terminal supports it,
+ * otherwise sixels.
+ *
+ * Previews are re-placed on each screen paint at the reserved blank
+ * lines in the formatted text.  Every terminal size change is treated
+ * as a possible resolution change and cell size is re-measured.
  */
 
 
@@ -34,6 +40,7 @@ int	 kitty_img_enabled(void);
 int	 kitty_img_count(void);
 void	 kitty_img_begin_message(void);
 void	 kitty_img_end_message(void);
+void	 kitty_img_note_resize(void);
 int	 kitty_img_from_part(ATTACH_S *, long, int *, int *);
 int	 kitty_img_from_cid(char *, int *, int *);
 int	 kitty_img_from_data_uri(char *, int *, int *);

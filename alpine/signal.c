@@ -42,6 +42,7 @@
 #include "../pith/adrbklib.h"
 #include "../pith/remote.h"
 #include "../pith/osdep/pipe.h"
+#include "../pith/kittyimg.h"
 
 
 /*
@@ -917,6 +918,7 @@ fix_windsize(struct pine *pine)
     mark_titlebar_dirty();
     clear_cursor_pos();
     get_windsize(pine->ttyo);
+    kitty_img_note_resize();
 
     if(old_width != pine->ttyo->screen_cols)
       clear_index_cache(pine->mail_stream, 0);

@@ -632,9 +632,12 @@ Additions include:
      protocols. Thanks to Geoffrey Bodwin for a report that lead to this
      implementation.
 
-<LI> When running in a kitty terminal, Alpine can display image attachments
-     and HTML inline images directly in the message viewer using the kitty
-     graphics protocol. This is controlled by
+<LI> Alpine can display image attachments and HTML inline images directly
+     in the message viewer. Kitty's graphics protocol is used when the
+     terminal supports it; otherwise sixels are used. Thumbnails are
+     sized in cells (not pixels) so they stay consistent across display
+     resolutions, and cell size is re-measured on every resize. This
+     is controlled by
      <a href="h_config_kitty_inline_images"><!--#echo var="FEAT_enable-kitty-inline-images"--></a>
      (enabled by default).
 
@@ -32296,20 +32299,29 @@ to the displayed text.
 <BODY>
 <H1>FEATURE: <!--#echo var="FEAT_enable-kitty-inline-images"--></H1>
 
-When this feature is enabled and Alpine is running in a kitty terminal,
-image attachments and HTML inline images (cid: and data: URIs) are
-drawn in the message text using kitty's graphics protocol.
+When this feature is enabled, image attachments and HTML inline images
+(cid: and data: URIs) are drawn in the message text. Alpine prefers
+the kitty graphics protocol and falls back to sixels when the terminal
+does not support kitty graphics.
 <P>
-Images are scaled to fit the current terminal size. Remote http(s) images
-are not fetched. If a decoder for a non-PNG image is needed, Alpine
-will try <TT>sips</TT>, <TT>magick</TT>, or <TT>convert</TT>.
+Thumbnails are sized in cells (at most 32 columns by 8 rows, keeping
+the image's aspect ratio), not in pixels. Cell width and height are
+measured so the drawing fills that cell box at the current resolution.
+Every terminal size change is treated as a possible resolution change
+and cell size is measured again.
+<P>
+Remote http(s) images are not fetched. If a decoder or resizer is
+needed, Alpine will try <TT>sips</TT>, <TT>magick</TT>, or
+<TT>convert</TT>.
 <P>
 This feature is on by default. Turn it off if you do not want images
-drawn in the viewer, or if your terminal does not implement the kitty
-graphics protocol.
+drawn in the viewer.
 <P>
-Under tmux, passthrough must be allowed
-(<TT>set -g allow-passthrough on</TT>) for images to appear.
+Under tmux, kitty images need passthrough
+(<TT>set -g allow-passthrough on</TT>). Sixel support requires a tmux
+new enough to display sixels natively.
+<P>
+<P>
 <P>
 &lt;End of help on this topic&gt;
 </BODY>
