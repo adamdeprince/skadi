@@ -658,12 +658,18 @@ Additions include:
      press <TT>^K</TT> to switch to a client path, which kitty pulls
      into the message. Kitty asks you to allow each client transfer.
 
-<LI> The composer accepts basic HTML markup via Alt-B/I/U (bold, italic,
-     underline), Alt-L/O (bullet and numbered lists), and a few other
-     tags (quote, heading, preformatted, rule, link, code, strikethrough).
-     Those tags are shown as formatting in the composer (lists as bullets
-     or numbers, bold/italic/underline as terminal attributes) and the
-     mail is sent as text/html.
+<LI> The composer has an HTML mode. Alt-B/I/U/S/C (bold, italic,
+     underline, strikethrough, code), Alt-L/O (bullet and numbered
+     lists), Alt-Q/H/P/R/K (quote, heading, preformatted, rule, link)
+     and Alt-G (inline image) insert markup that the composer shows as
+     formatting; the cursor skips over the tags and deleting into one
+     removes it with its partner. Alt-M toggles HTML mode, Alt-V
+     previews the plain-text rendering. An HTML message goes out as
+     multipart/alternative (and multipart/related when it has inline
+     images), a postponed HTML draft resumes with its markup, and
+     with <a href="h_config_reply_keep_html_markup"><!--#echo var="FEAT_reply-keeps-html-markup"--></a>
+     replies keep the simple formatting of an HTML original. See also
+     <a href="h_config_compose_html_default"><!--#echo var="FEAT_compose-html-by-default"--></a>.
 
 <LI> Alpine can pass an HTML message to an external web browser, by using the
      &quot;External&quot; command in the <a href="h_attachment_screen">ATTACHMENT INDEX</a>
@@ -5486,6 +5492,8 @@ There are also additional details on
 <li><a href="h_config_pass_control">FEATURE: <!--#echo var="FEAT_pass-control-characters-as-is"--></a>
 <li><a href="h_config_predict_nntp_server">FEATURE: <!--#echo var="FEAT_predict-nntp-server"--></a>
 <li><a href="h_config_prefer_plain_text">FEATURE: <!--#echo var="FEAT_prefer-plain-text"--></a>
+<li><a href="h_config_compose_html_default">FEATURE: <!--#echo var="FEAT_compose-html-by-default"--></a>
+<li><a href="h_config_reply_keep_html_markup">FEATURE: <!--#echo var="FEAT_reply-keeps-html-markup"--></a>
 <li><a href="h_config_graph_prefer_plain_text">FEATURE: <!--#echo var="FEAT_graph-prefer-plain-text"--></a>
 <li><a href="h_config_graph_downloads_envelope_only">FEATURE: <!--#echo var="FEAT_graph-download-envelope-only"--></a>
 <li><a href="h_config_graph_expunge_moves_to_trash">FEATURE: <!--#echo var="FEAT_graph-expunge-moves-to-trash"--></a>
@@ -15894,7 +15902,10 @@ EXIT COMMANDS    |  GENERAL COMMANDS    | ^T     To Addressbook
 <!--chtml endif-->
 <P>
 HTML markup (Alt plus a letter; kitty and other modern terminals report
-Alt as a modifier). Mark a region with ^^ first to wrap existing text.
+Alt as a modifier). Mark a region with ^^ first to wrap existing text;
+with no region the inline commands insert an empty pair of tags and
+leave the cursor between them. Pressing the same command again while
+inside such a span removes the tags again.
 <PRE>
   Alt-B   Bold              Alt-I   Italic
   Alt-U   Underline         Alt-S   Strikethrough
@@ -15902,10 +15913,73 @@ Alt as a modifier). Mark a region with ^^ first to wrap existing text.
   Alt-Q   Block quote       Alt-P   Preformatted
   Alt-R   Horizontal rule   Alt-K   Link (asks for URL)
   Alt-L   Bullet list       Alt-O   Numbered list
+  Alt-G   Insert image      Alt-V   Preview the plain-text rendering
+  Alt-M   Toggle HTML mode
 </PRE>
 The composer shows tags as formatting (bullets, numbers, bold, italic,
-underline) rather than as raw HTML. A message that contains these tags
-is sent as text/html.
+underline) rather than as raw HTML. The cursor skips over tags, and
+deleting into a tag removes the whole tag together with its partner.
+Return inside a list item starts the next item; Return on an empty
+item ends the list. Justify and automatic wrapping keep tags intact,
+and the spelling checker ignores them.
+<P>
+A message is sent as HTML when HTML mode is on. Any markup command
+turns it on, Alt-M toggles it, and the key menu then labels the exit
+command &quot;Send HTML&quot;. The feature
+<A HREF="h_config_compose_html_default"><!--#echo var="FEAT_compose-html-by-default"--></A>
+turns it on for every message. With HTML mode off the text is sent as
+plain text even if it contains angle brackets. When the mode was never
+touched, text that already contains a tag opened and closed on one line
+(for example a resumed draft) is still sent as HTML.
+<P>
+An HTML message goes out as multipart/alternative. The text/html part
+holds paragraphs, lists, quotes and links built from your text; every
+other tag and every attribute is escaped or dropped, link targets are
+limited to web and mail addresses. The text/plain part holds the same
+text rendered with bullets and &quot;&gt; &quot; quoting; Alt-V shows
+that rendering. Images inserted with Alt-G are attached and referenced
+from the html part, which then travels in multipart/related.
+<P>
+&lt;End of help on this topic&gt;
+</BODY>
+</HTML>
+====== h_config_compose_html_default =====
+<HTML>
+<HEAD>
+<TITLE>FEATURE: <!--#echo var="FEAT_compose-html-by-default"--></TITLE>
+</HEAD>
+<BODY>
+<H1>FEATURE: <!--#echo var="FEAT_compose-html-by-default"--></H1>
+
+When this feature is set, the composer starts every message in HTML
+mode, so it is sent as text/html (with a text/plain alternative) even
+if you never use a markup command. Alt-M in the composer turns HTML
+mode off for a single message.
+<P>
+When this feature is not set, HTML mode starts off and is turned on by
+the first markup command, by Alt-M, or by resuming a draft that was
+already HTML.
+<P>
+&lt;End of help on this topic&gt;
+</BODY>
+</HTML>
+====== h_config_reply_keep_html_markup =====
+<HTML>
+<HEAD>
+<TITLE>FEATURE: <!--#echo var="FEAT_reply-keeps-html-markup"--></TITLE>
+</HEAD>
+<BODY>
+<H1>FEATURE: <!--#echo var="FEAT_reply-keeps-html-markup"--></H1>
+
+When this feature is set and you reply to or forward a message whose
+text is HTML, the quoted text keeps its basic formatting: bold, italic,
+underline, strikethrough, code, links, lists, quotes and headings are
+carried into the composer as markup, and the reply starts in HTML
+mode. Anything else in the original (tables, images, styles, scripts)
+is reduced to plain text.
+<P>
+When this feature is not set, HTML is converted to plain text before
+quoting, as before.
 <P>
 &lt;End of help on this topic&gt;
 </BODY>

@@ -1314,7 +1314,9 @@ modeline(WINDOW *wp)
 	  ShowPrompt();
 	else{
 	    menu_compose[EXIT_KEY].label  = (Pmaster->headents)
-					      ? N_("Send") :N_("Exit");
+					      ? (htmlfmt_effective_html()
+						   ? N_("Send HTML") : N_("Send"))
+					      : N_("Exit");
 	    menu_compose[PSTPN_KEY].name  = (Pmaster->headents)
 					      ? "^O" : NULL;
 	    menu_compose[PSTPN_KEY].label = (Pmaster->headents)

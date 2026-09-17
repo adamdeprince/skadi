@@ -101,6 +101,17 @@ int        dont_flow_this_time(void);
 int	   mime_type_for_pico(char *);
 int	   term_fetch_for_pico(char *, char *, size_t, long *);
 char      *cancel_for_pico(void (*)(void));
+char      *compose_preview_text(char *, int *);
+int        compose_html_wanted(struct mail_bodystruct *);
+void       html_group_related(struct mail_bodystruct **);
+
+/* composer HTML mode, kept in pico/htmlfmt.c */
+#define	HTMLFMT_AUTO	(-1)
+#define	HTMLFMT_OFF	0
+#define	HTMLFMT_ON	1
+extern int   htmlfmt_mode(void);
+extern void  htmlfmt_set_mode(int);
+extern void  htmlfmt_set_preview_hook(char *(*)(char *, int *));
 int	   filter_message_text(char *, ENVELOPE *, BODY *, STORE_S **, METAENV *);
 void	   pine_send_newsgroup_name(char *, char*, size_t);
 void       outgoing2strings(METAENV *, BODY *, void **, PATMT **, int);
@@ -484,7 +495,8 @@ compose_mail(char *given_to, char *fcc_arg, ACTION_S *role_arg,
 		if(F_ON(F_ALT_COMPOSE_MENU, ps_global) || 
 		   (ret = redraft_prompt("Interrupted",INTRPT_PMT,'n')) =='y'){
 		    if(!redraft(&stream, &outgoing, &body, &fcc, &lcc, &reply,
-				&redraft_pos, &custom, &role, REDRAFT_DEL)){
+				&redraft_pos, &custom, &role,
+				REDRAFT_DEL | REDRAFT_HTML)){
 			if(stream)
 			  pine_mail_close(stream);
 
@@ -529,7 +541,7 @@ compose_mail(char *given_to, char *fcc_arg, ACTION_S *role_arg,
 	       (ret = redraft_prompt("Postponed",PSTPND_PMT,'n')) == 'y'){
 		if(!redraft(&stream, &outgoing, &body, &fcc, &lcc, &reply,
 			    &redraft_pos, &custom, &role,
-			    REDRAFT_DEL | REDRAFT_PPND))
+			    REDRAFT_DEL | REDRAFT_PPND | REDRAFT_HTML))
 		  done++;
 
 		/* stream may or may not be closed in redraft() */
@@ -570,7 +582,7 @@ compose_mail(char *given_to, char *fcc_arg, ACTION_S *role_arg,
 	    if(F_ON(F_ALT_COMPOSE_MENU, ps_global) ||
 	       (ret = want_to(FORM_PMT,'y','x',NO_HELP,WT_NORM))=='y'){
 		if(!redraft(&stream, &outgoing, &body, &fcc, &lcc, &reply,
-			    &redraft_pos, &custom, &role, REDRAFT_NONE))
+			    &redraft_pos, &custom, &role, REDRAFT_HTML))
 		    done++;
 
 		/* stream may or may not be closed in redraft() */
@@ -1859,6 +1871,18 @@ pine_send(ENVELOPE *outgoing, struct mail_bodystruct **body,
     save_previous_pbuf = pbf;
     pbf = &pbuf1;
     standard_picobuf_setup(pbf);
+
+    /*
+     * The composer starts in HTML mode when the draft or quoted text
+     * already carries markup, or when the user asked for it; otherwise
+     * markup commands or the toggle turn it on.
+     */
+    htmlfmt_set_mode(html_compose_start_html
+		       ? HTMLFMT_ON
+		       : (F_ON(F_COMPOSE_HTML_DEFAULT, ps_global)
+			    ? HTMLFMT_ON : HTMLFMT_AUTO));
+    html_compose_start_html = 0;
+    htmlfmt_set_preview_hook(compose_preview_text);
 
     /*
      * Cancel any pending initial commands since pico uses a different
@@ -6157,6 +6181,18 @@ create_message_body(struct mail_bodystruct **b, PATMT *attach, int flow_it)
         p->body.id		   = generate_message_id(NULL);
         p->body.contents.text.data = file_contents;
 
+	if(pa->description && !struncmp(pa->description, "cid:", 4)
+	   && pa->description[4]){
+	    /* an inline image the composer inserted: keep its cid */
+	    size_t idlen = strlen(pa->description + 4) + 3;
+
+	    fs_give((void **) &p->body.id);
+	    p->body.id = (char *) fs_get(idlen);
+	    snprintf(p->body.id, idlen, "<%s>", pa->description + 4);
+	    p->body.disposition.type = cpystr("inline");
+	    fs_give((void **) &pa->description);
+	}
+
 	/*
 	 * Set type to unknown and let set_mime_type_by_* figure it out.
 	 * Always encode attachments we add as BINARY.
@@ -6217,6 +6253,9 @@ create_message_body(struct mail_bodystruct **b, PATMT *attach, int flow_it)
         pa->id = cpystr(p->body.id);
     }
 
+    /* inline images referenced from the html part go into multipart/related */
+    html_group_related(b);
+
     /*
      * Now, if this multipart has but one text piece (that is, no
      * attachments), then downgrade from a composite type to a discrete
@@ -6248,22 +6287,228 @@ create_message_body(struct mail_bodystruct **b, PATMT *attach, int flow_it)
 void
 create_message_body_text(struct mail_bodystruct *b, int flow_it)
 {
-    int html = 0;
+    PART *part;
+    int   html;
+
+    if(!b)
+      return;
 
     set_mime_type_by_grope(b);
-    htmlify_composed_text(b);
-    html = (b && b->type == TYPETEXT && b->subtype && !strucmp(b->subtype, "HTML"));
-    if(b != NULL){
-       remove_parameter(&b->parameter, "format"); /* we will set it up below */
-       remove_parameter(&b->parameter, "delsp");  /* we never set this up    */
-    }
-    if(!html
-       && F_OFF(F_QUELL_FLOWED_TEXT, ps_global)
-       && F_OFF(F_STRIP_WS_BEFORE_SEND, ps_global)
-       && flow_it)
-      set_parameter(b ? &b->parameter : NULL, "format", "flowed");
+    html = compose_html_wanted(b);
+    if(html){
+	char *cs, *charset;
 
-    set_body_size(b);
+	cs = parameter_val(b->parameter, "charset");
+	charset = posting_characterset(b, cs, MsgBody);
+	htmlify_composed_text(b, charset);
+	if(cs)
+	  fs_give((void **) &cs);
+
+	html_wrap_alternative(b);		/* b is multipart now */
+    }
+
+    if(b->type == TYPETEXT){
+	remove_parameter(&b->parameter, "format"); /* we will set it up below */
+	remove_parameter(&b->parameter, "delsp");  /* we never set this up    */
+	if(!html
+	   && F_OFF(F_QUELL_FLOWED_TEXT, ps_global)
+	   && F_OFF(F_STRIP_WS_BEFORE_SEND, ps_global)
+	   && flow_it)
+	  set_parameter(&b->parameter, "format", "flowed");
+
+	set_body_size(b);
+    }
+    else if(b->type == TYPEMULTIPART){
+	for(part = b->nested.part; part; part = part->next){
+	    remove_parameter(&part->body.parameter, "format");
+	    remove_parameter(&part->body.parameter, "delsp");
+	    if(part->body.type == TYPETEXT && part->body.contents.text.data)
+	      set_body_size(&part->body);
+	}
+    }
+}
+
+
+/*
+ * Should the composed text go out as HTML?  The composer's mode wins;
+ * when it was never touched, only text that already contains a tag
+ * opened and closed on one line counts.
+ */
+int
+compose_html_wanted(struct mail_bodystruct *b)
+{
+    int mode;
+
+    if(!(b && b->type == TYPETEXT && b->contents.text.data
+	 && (!b->subtype || !strucmp(b->subtype, "PLAIN"))))
+      return(0);
+
+    mode = htmlfmt_mode();
+    if(mode == HTMLFMT_ON)
+      return(1);
+
+    if(mode == HTMLFMT_OFF)
+      return(0);
+
+    return(compose_text_is_html(b));
+}
+
+
+/*
+ * Composer preview hook: render the current text the way the
+ * text/plain alternative will look.  Returns an allocated string,
+ * or NULL when the message would go out as plain text.
+ */
+char *
+compose_preview_text(char *text, int *is_html)
+{
+    BODY    *b;
+    STORE_S *so;
+    char    *plain = NULL;
+
+    if(is_html)
+      *is_html = 0;
+
+    if(!text)
+      return(NULL);
+
+    so = so_get(CharStar, NULL, EDIT_ACCESS);
+    if(!so)
+      return(NULL);
+
+    so_puts(so, text);
+    b = mail_newbody();
+    b->type = TYPETEXT;
+    b->subtype = cpystr("PLAIN");
+    b->contents.text.data = (void *) so;
+    set_mime_type_by_grope(b);
+    if(compose_html_wanted(b)){
+	htmlify_composed_text(b, "UTF-8");
+	html_wrap_alternative(b);
+	if(b->type == TYPEMULTIPART && b->nested.part
+	   && b->nested.part->body.contents.text.data){
+	    if(is_html)
+	      *is_html = 1;
+
+	    plain = cpystr((char *) so_text((STORE_S *) b->nested.part->body.contents.text.data));
+	}
+    }
+
+    pine_free_body(&b);
+    return(plain);
+}
+
+
+/*
+ * If the html text references inline images by cid:, move those
+ * attachments with the text into a multipart/related.
+ */
+void
+html_group_related(struct mail_bodystruct **b)
+{
+    PART   *first, *p, **pp, *rel, *tail, *shell;
+    BODY   *htmlb = NULL, *tmp_body;
+    char  **ids = NULL, *html, *id;
+    int	    n, i, matches = 0;
+
+    if(!(b && *b && (*b)->type == TYPEMULTIPART && (*b)->nested.part))
+      return;
+
+    first = (*b)->nested.part;
+    if(first->body.type == TYPEMULTIPART && first->body.subtype
+       && !strucmp(first->body.subtype, "ALTERNATIVE")){
+	for(p = first->body.nested.part; p; p = p->next)
+	  if(p->body.type == TYPETEXT && p->body.subtype
+	     && !strucmp(p->body.subtype, "HTML"))
+	    htmlb = &p->body;
+    }
+    else if(first->body.type == TYPETEXT && first->body.subtype
+	    && !strucmp(first->body.subtype, "HTML"))
+      htmlb = &first->body;
+
+    if(!(htmlb && htmlb->contents.text.data
+	 && ((STORE_S *) htmlb->contents.text.data)->src == CharStar))
+      return;
+
+    html = (char *) so_text((STORE_S *) htmlb->contents.text.data);
+    n = html_find_cid_refs(html, &ids);
+    if(n <= 0)
+      return;
+
+    /* which sibling parts are referenced? */
+    for(p = first->next; p; p = p->next){
+	if(!p->body.id)
+	  continue;
+
+	id = p->body.id;
+	if(*id == '<')
+	  id++;
+
+	for(i = 0; i < n; i++)
+	  if(!strncmp(id, ids[i], strlen(ids[i]))
+	     && (id[strlen(ids[i])] == '>' || !id[strlen(ids[i])])){
+	      matches++;
+	      break;
+	  }
+    }
+
+    if(matches){
+	/* the text container becomes the first part of a related */
+	shell = mail_newbody_part();
+	shell->body = first->body;
+	shell->next = NULL;
+	rel = mail_newbody_part();
+	rel->body.type = TYPEMULTIPART;
+	rel->body.subtype = cpystr("RELATED");
+	set_parameter(&rel->body.parameter, "type",
+		      (shell->body.type == TYPEMULTIPART)
+			? "multipart/alternative" : "text/html");
+	rel->body.nested.part = shell;
+	tail = shell;
+
+	for(pp = &first->next; *pp; ){
+	    p = *pp;
+	    id = p->body.id ? p->body.id : "";
+	    if(*id == '<')
+	      id++;
+
+	    for(i = 0; i < n; i++)
+	      if(!strncmp(id, ids[i], strlen(ids[i]))
+		 && (id[strlen(ids[i])] == '>' || !id[strlen(ids[i])]))
+		break;
+
+	    if(i < n){
+		*pp = p->next;
+		p->next = NULL;
+		tail->next = p;
+		tail = p;
+		if(p->body.disposition.type)
+		  fs_give((void **) &p->body.disposition.type);
+
+		p->body.disposition.type = cpystr("inline");
+	    }
+	    else
+	      pp = &p->next;
+	}
+
+	first->body = rel->body;
+	memset(&rel->body, 0, sizeof(rel->body));
+	fs_give((void **) &rel);
+
+	if(!first->next){
+	    /* nothing but the related part: promote it */
+	    tmp_body  = mail_newbody();
+	    *tmp_body = first->body;
+	    mail_initbody(&first->body);
+	    mail_free_body(b);
+	    *b = tmp_body;
+	}
+    }
+
+    for(i = 0; i < n; i++)
+      fs_give((void **) &ids[i]);
+
+    fs_give((void **) &ids);
 }
 
 

@@ -44,6 +44,10 @@
 #define	REDRAFT_DEL	0x02
 #define	REDRAFT_HTML	0x04
 
+/* which message part to test for xliteration */
+typedef enum {MsgBody, HdrText} MsgPart;
+char	  *posting_characterset(void *, char *, MsgPart);
+
 
 /*
  * Child posting control structure

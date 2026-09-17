@@ -19,6 +19,7 @@
 #include <general.h>
 
 #include "../headers.h"
+#include "../htmlfmt.h"
 /*
 #include "../estruct.h"
 #include "../mode.h"
@@ -97,7 +98,7 @@ spell(int f, int n)
     if(alt_speller)
       return(alt_editor(1, 0));			/* f == 1 means fork speller */
 
-    if((fn = writetmp(0, NULL)) == NULL){
+    if((fn = html_writetmp_stripped(NULL)) == NULL){
 	emlwrite(_("Can't write temp file for spell checker"), NULL);
 	return(-1);
     }

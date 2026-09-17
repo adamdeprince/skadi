@@ -111,6 +111,9 @@ KEYTAB  keytab[NBINDS] = {
 	{META|'l',		htmlfmt_ulist},
 	{META|'o',		htmlfmt_olist},
 	{META|'k',		htmlfmt_link},
+	{META|'m',		htmlfmt_toggle},
+	{META|'v',		htmlfmt_preview},
+	{META|'g',		htmlfmt_image},
 	{0x7F,			backdel},
 	{0,			NULL}
 };
@@ -184,6 +187,9 @@ KEYTAB  pkeytab[NBINDS] = {
 	{META|'l',		htmlfmt_ulist},
 	{META|'o',		htmlfmt_olist},
 	{META|'k',		htmlfmt_link},
+	{META|'m',		htmlfmt_toggle},
+	{META|'v',		htmlfmt_preview},
+	{META|'g',		htmlfmt_image},
 	{0x7F,			backdel},
 	{0,			NULL}
 };

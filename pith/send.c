@@ -95,9 +95,6 @@ PRIORITY_S priorities[] = {
 
 #define ctrl(c) ((c) & 0x1f)
 
-/* which message part to test for xliteration */
-typedef enum {MsgBody, HdrText} MsgPart;
-
 
 /*
  * Internal prototypes

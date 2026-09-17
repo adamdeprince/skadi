@@ -21,6 +21,7 @@
  */
 
 #include	"headers.h"
+#include	"htmlfmt.h"
 
 
 int fpnewline(UCS *quote);
@@ -48,8 +49,26 @@ wrapword(void)
       return(FALSE);
 
     wid = 0;
-    for(bp = cnt = 0; cnt < llength(curwp->w_dotp) && !bp; cnt++){
-	if(ucs4_isspace(lgetc(curwp->w_dotp, cnt).c)){
+    for(bp = cnt = 0; cnt < llength(curwp->w_dotp) && !bp; ){
+	int tl;
+
+	if((tl = html_tag_starting_at(curwp->w_dotp, cnt)) > 0){
+	    /* a hidden tag belongs to the word it touches and has no width */
+	    if(!first)
+	      first = cnt;
+
+	    cnt += tl;
+	    continue;
+	}
+
+	if((tl = html_entity_starting_at(curwp->w_dotp, cnt)) > 0){
+	    if(!first)
+	      first = cnt;
+
+	    ++wid;
+	    cnt += tl;
+	}
+	else if(ucs4_isspace(lgetc(curwp->w_dotp, cnt).c)){
 	    first = 0;
 	    if(lgetc(curwp->w_dotp, cnt).c == TAB){
 	      ++wid;
@@ -58,12 +77,16 @@ wrapword(void)
 	    }
 	    else
 	      ++wid;
+
+	    cnt++;
 	}
 	else{
 	    ww = wcellwidth((UCS) lgetc(curwp->w_dotp, cnt).c);
 	    wid += (ww >= 0 ? ww : 1);
 	    if(!first)
 	      first = cnt;
+
+	    cnt++;
 	}
 
 	if(first > 0 && wid > fillcol)
@@ -903,11 +926,58 @@ fillpara(int f, int n)
  * reinstalled region is noted in addedregion, so that yank()
  * can delete it and restore the saved part.
  */
+/*
+ * Length of the known tag at position start of the fill buffer, so
+ * that justify keeps a tag (and the spaces inside an <a href>) in
+ * one piece.
+ */
+static int
+fill_tag_len(int start)
+{
+    long c;
+    int	 k = start + 1, n = 0;
+    char name[32];
+
+    if(fremove(start) != '<')
+      return(0);
+
+    if(fremove(k) == '/')
+      k++;
+
+    if(fremove(k) == '!'){
+	name[n++] = '!';
+	k++;
+    }
+
+    while((c = fremove(k)) >= 0 && n < (int) sizeof(name) - 1
+	  && ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+	      || (c >= '0' && c <= '9') || c == '-')){
+	name[n++] = (char) ((c >= 'A' && c <= 'Z') ? c - 'A' + 'a' : c);
+	k++;
+    }
+
+    name[n] = '\0';
+    if(!n || !html_known_tag_name(name))
+      return(0);
+
+    while((c = fremove(k)) >= 0 && c != '>' && c != '\n'){
+	k++;
+	if(k - start > 512)
+	  return(0);
+    }
+
+    if(c != '>')
+      return(0);
+
+    return(k - start + 1);
+}
+
+
 int
 fillregion(UCS *qstr, REGION *addedregion)
 {
     long    c, sz, last_char = 0;
-    int	    i, j, qlen, same_word,
+    int	    i, j, qlen, same_word, tl,
 	    spaces, word_len, word_ind, line_len, ww;
     int     starts_midline = 0;
     int     ends_midline = 0;
@@ -1030,6 +1100,16 @@ fillregion(UCS *qstr, REGION *addedregion)
 
 		word_len = word_ind = 0;
 		line_last = ' ';
+	    }
+
+	    if(c == '<' && (tl = fill_tag_len(i - 1)) > 0
+	       && word_ind + tl < NSTRING - 1){
+		/* a tag travels with its word and takes no room */
+		for(j = 0; j < tl; j++)
+		  word[word_ind++] = (UCS) fremove(i - 1 + j);
+
+		i += tl - 1;
+		break;
 	    }
 
 	    word[word_ind++] = (UCS) c;
