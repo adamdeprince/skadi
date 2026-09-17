@@ -21,6 +21,7 @@
 
 #include "../pith/headers.h"
 #include "../pith/stream.h"
+#include "../pith/offcache.h"
 #include "../pith/state.h"
 #include "../pith/conf.h"
 #include "../pith/flag.h"
@@ -1561,6 +1562,8 @@ char *
 pine_mail_fetch_body(MAILSTREAM *stream, long unsigned int msgno, char *section,
 		     long unsigned int *len, long int flags)
 {
+    offcache_note_fetch(stream, msgno);
+
 #ifdef _WINDOWS
     if(F_ON(F_QUELL_SSL_LARGEBLOCKS, ps_global))
       return(pine_mail_partial_fetch_wrapper(stream, msgno, 
@@ -1579,6 +1582,8 @@ char *
 pine_mail_fetch_text(MAILSTREAM *stream, long unsigned int msgno, char *section,
 		     long unsigned int *len, long int flags)
 {
+    offcache_note_fetch(stream, msgno);
+
 #ifdef _WINDOWS
     if(F_ON(F_QUELL_SSL_LARGEBLOCKS, ps_global))
       return(pine_mail_partial_fetch_wrapper(stream, msgno,

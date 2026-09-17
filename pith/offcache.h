@@ -14,11 +14,17 @@
 
 
 /*
- * Write-on-exit offline cache for remote folders.
+ * Offline cache for remote IMAP folders.
  *
  * What we have already fetched lives in RAM for the session.  Disk is
- * touched once at startup (load) and once at exit (save, and only if
- * something changed).  That is the I/O budget for cheap SSDs.
+ * read once at startup and written when a folder is closed, at exit,
+ * and from the signal cleanup path -- and only for folders that
+ * changed.  There are no periodic writes.
+ *
+ * Flag changes, keyword changes and expunges made while reading the
+ * cache are remembered per message (and per deleted UID) and applied
+ * to the live folder the next time it is opened, provided its
+ * UIDVALIDITY is unchanged.
  */
 
 
@@ -28,19 +34,26 @@
 int	 offcache_enabled(void);
 int	 offcache_is_name(char *);
 int	 offcache_is_stream(MAILSTREAM *);
+int	 offcache_cacheable_name(char *);
+int	 offcache_cacheable_stream(MAILSTREAM *);
 int	 offcache_has_folder(char *);
 int	 offcache_network_ok(void);
 void	 offcache_note_live(void);
 char	*offcache_name_for(char *);
 char	*offcache_real_name(char *);
 int	 offcache_skip_remote_probe(char *);
+int	 offcache_pending_count(char *);
 
 void	 offcache_link_driver(void);
 void	 offcache_init(void);
 void	 offcache_load_all(void);
 void	 offcache_save_all(void);
+void	 offcache_checkpoint(void);
+void	 offcache_emergency_save(void);
 void	 offcache_learn_stream(MAILSTREAM *);
-void	 offcache_apply_dirty_flags(MAILSTREAM *);
+void	 offcache_learn_stream_quick(MAILSTREAM *);
+void	 offcache_apply_pending(MAILSTREAM *);
+void	 offcache_note_fetch(MAILSTREAM *, unsigned long);
 
 
 #endif /* PITH_OFFCACHE_INCLUDED */

@@ -646,12 +646,15 @@ Additions include:
      and
      <a href="h_config_inline_image_count"><!--#echo var="VAR_inline-image-max-count"--></a>.
 
-<LI> Alpine keeps an offline cache of remote folders it has already
-     opened. Envelopes, flags, headers, and message bodies that have
-     been fetched are held in memory and written once when Alpine
-     exits. The next session opens that cache immediately and does
-     not contact the server until you reopen a folder. Compose works
-     without a network connection. This is controlled by
+<LI> Alpine keeps an offline cache of remote IMAP folders it has
+     already opened. Envelopes, flags, headers, and the bodies of
+     messages you have viewed are held in memory and written to disk
+     when a folder is closed or Alpine exits. If the server cannot be
+     reached the cached copy is opened instead; flag changes and
+     deletions made offline are applied on the next live open, and
+     the <TT>sYnc</TT> command does that on request. Messages that
+     cannot be sent are queued in a local outbox and sent when a
+     connection is next made. This is controlled by
      <a href="h_config_offline_cache"><!--#echo var="FEAT_enable-offline-cache"--></a>
      (enabled by default).
 
@@ -5454,6 +5457,7 @@ There are also additional details on
 <li><a href="h_config_enable_jump">FEATURE: <!--#echo var="FEAT_enable-jump-shortcut"--></a>
 <li><a href="h_config_kitty_inline_images">FEATURE: <!--#echo var="FEAT_enable-kitty-inline-images"--></a>
 <li><a href="h_config_offline_cache">FEATURE: <!--#echo var="FEAT_enable-offline-cache"--></a>
+<li><a href="h_config_offline_cache_first">FEATURE: <!--#echo var="FEAT_offline-cache-open-first"--></a>
 <li><a href="h_config_show_delay_cue">FEATURE: <!--#echo var="FEAT_enable-mail-check-cue"--></a>
 <li><a href="h_config_mailcap_params">FEATURE: <!--#echo var="FEAT_enable-mailcap-param-substitution"--></a>
 <li><a href="h_config_enable_mouse">FEATURE: <!--#echo var="FEAT_enable-mouse-in-xterm"--></a>
@@ -5826,6 +5830,9 @@ There are also additional details on
 <li><a href="h_config_user_dom">OPTION: <!--#echo var="VAR_user-domain"--></a>
 <li><a href="h_config_user_id">OPTION: <!--#echo var="VAR_user-id"--></a>
 <li><a href="h_config_user_input_timeo">OPTION: <!--#echo var="VAR_user-input-timeout"--></a>
+<li><a href="h_config_offcache_folder_mb">OPTION: <!--#echo var="VAR_offline-cache-folder-max-mb"--></a>
+<li><a href="h_config_offcache_total_mb">OPTION: <!--#echo var="VAR_offline-cache-total-max-mb"--></a>
+<li><a href="h_config_offcache_max_age">OPTION: <!--#echo var="VAR_offline-cache-max-age-days"--></a>
 <li><a href="h_config_viewer_headers">OPTION: <!--#echo var="VAR_viewer-hdrs"--></a>
 <li><a href="h_config_customhdr_pattern">OPTION: Viewer Header Color Pattern</a>
 <li><a href="h_config_customhdr_color">OPTION: <!--#echo var="VAR_viewer-hdr-colors"--></a>
@@ -32521,29 +32528,120 @@ is enabled.
 <BODY>
 <H1>FEATURE: <!--#echo var="FEAT_enable-offline-cache"--></H1>
 
-When this feature is enabled, Alpine remembers remote folders it has
+When this feature is enabled, Alpine remembers remote IMAP folders it has
 already opened so you can read them later without a network connection.
+News and POP folders are not cached.
 <P>
 The cache is kept in memory while Alpine is running. It is written to
-<TT>~/.alpine-offcache</TT> only when Alpine exits, and only if something
-changed. That avoids constant disk writes on devices with limited flash
-storage.
+<TT>~/.alpine-offcache</TT> (with mode 0600) when a folder is closed,
+when Alpine exits, and when Alpine is terminated by a hangup or a
+terminate signal; only folders that changed are written, and nothing is
+written on a timer. That avoids constant disk writes on devices with
+limited flash storage.
 <P>
-At startup Alpine opens the cached copy of INBOX if one exists, and does
-not contact the IMAP server. Compose does not probe remote postponed or
-form-letter folders until a live connection has been made in this session.
+When you open a remote folder, Alpine first tries the server with a short
+timeout and falls back to the cached copy if the server cannot be reached.
+The title bar shows <TT>[offline]</TT> while you are reading a cached
+folder. If you would rather open the cache immediately and only contact
+the server on request, turn on
+<A HREF="h_config_offline_cache_first"><!--#echo var="FEAT_offline-cache-open-first"--></A>.
 <P>
-To fetch new mail, reopen the folder (Alpine will offer this when checking
-for new mail on a cached folder). If the server cannot be reached, Alpine
-falls back to the cache. Flag changes made while offline are stored in
-the cache and applied the next time the live folder is opened.
+Flag changes, keyword changes, and deletions (including expunges) made
+while reading the cache are remembered and applied the next time the live
+folder is opened, provided the folder was not reset on the server in the
+meantime. Only the flags you changed are applied, so changes made from
+another client are not undone. The <TT>Sync</TT> command in the MESSAGE
+INDEX reopens the live folder and applies pending changes; on a live folder
+it refreshes the cache and sends anything waiting in the local outbox.
 <P>
-Message bodies are cached only after they have been viewed, up to 32 MB
-per folder. Messages that have never been opened show their headers and a
-note that the body is not cached.
+Message bodies are cached for messages you have viewed; a message that has
+never been viewed shows its headers and a note that the body is not cached.
+Bodies larger than 4&nbsp;MB are never cached. The amount of body text
+kept is limited by
+<A HREF="h_config_offcache_folder_mb"><!--#echo var="VAR_offline-cache-folder-max-mb"--></A>
+and
+<A HREF="h_config_offcache_total_mb"><!--#echo var="VAR_offline-cache-total-max-mb"--></A>,
+and cached folders you have not opened for
+<A HREF="h_config_offcache_max_age"><!--#echo var="VAR_offline-cache-max-age-days"--></A>
+days are discarded.
 <P>
-This feature is on by default. Turn it off if you always want Alpine to
-open the server at startup.
+Messages that could not be sent are queued in <TT>~/.alpine-outbox</TT>
+and sent automatically the next time a live connection is made, through the
+normal sending configuration (SMTP or sendmail, roles, and Fcc). A message
+that fails to send several times is left in the outbox and reported, so
+you can open that folder and resend or delete it.
+<P>
+This feature is on by default. It has no effect on Windows.
+<P>
+&lt;End of help on this topic&gt;
+</BODY>
+</HTML>
+====== h_config_offline_cache_first =====
+<HTML>
+<HEAD>
+<TITLE>FEATURE: <!--#echo var="FEAT_offline-cache-open-first"--></TITLE>
+</HEAD>
+<BODY>
+<H1>FEATURE: <!--#echo var="FEAT_offline-cache-open-first"--></H1>
+
+When this feature is enabled (and the
+<A HREF="h_config_offline_cache"><!--#echo var="FEAT_enable-offline-cache"--></A>
+feature is on), a remote folder that has a cached copy is opened from the
+cache without contacting the server, and Alpine does not connect at startup
+at all. Use the <TT>Sync</TT> command to open the live folder and apply
+pending changes. Compose does not probe remote postponed or form-letter
+folders until a live connection has been made.
+<P>
+This is useful on slow or metered links. The feature is off by default: normally Alpine
+tries the server first, with a short timeout, and only falls back to the
+cache when the server cannot be reached.
+<P>
+&lt;End of help on this topic&gt;
+</BODY>
+</HTML>
+====== h_config_offcache_folder_mb =====
+<HTML>
+<HEAD>
+<TITLE>OPTION: <!--#echo var="VAR_offline-cache-folder-max-mb"--></TITLE>
+</HEAD>
+<BODY>
+<H1>OPTION: <!--#echo var="VAR_offline-cache-folder-max-mb"--></H1>
+
+The largest amount of message body text, in megabytes, that the offline
+cache keeps for any one folder. Headers and flags are always kept. When the
+limit is reached the bodies of the oldest messages are dropped first.
+The default is 32.
+<P>
+&lt;End of help on this topic&gt;
+</BODY>
+</HTML>
+====== h_config_offcache_total_mb =====
+<HTML>
+<HEAD>
+<TITLE>OPTION: <!--#echo var="VAR_offline-cache-total-max-mb"--></TITLE>
+</HEAD>
+<BODY>
+<H1>OPTION: <!--#echo var="VAR_offline-cache-total-max-mb"--></H1>
+
+The largest amount of message body text, in megabytes, that the offline
+cache keeps for all folders together. When the limit is exceeded at
+startup, the bodies of the folders you opened least recently are dropped.
+The default is 256.
+<P>
+&lt;End of help on this topic&gt;
+</BODY>
+</HTML>
+====== h_config_offcache_max_age =====
+<HTML>
+<HEAD>
+<TITLE>OPTION: <!--#echo var="VAR_offline-cache-max-age-days"--></TITLE>
+</HEAD>
+<BODY>
+<H1>OPTION: <!--#echo var="VAR_offline-cache-max-age-days"--></H1>
+
+A cached folder that you have not opened for this many days is removed
+from the offline cache at startup. Set it to zero to keep cached folders
+forever. The default is 90.
 <P>
 &lt;End of help on this topic&gt;
 </BODY>

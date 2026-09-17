@@ -43,6 +43,7 @@
 #include "../pith/remote.h"
 #include "../pith/osdep/pipe.h"
 #include "../pith/kittyimg.h"
+#include "../pith/offcache.h"
 
 
 /*
@@ -357,6 +358,9 @@ fast_clean_up(void)
 	
 	free_pinerc_s(&ps_global->post_prc);
     }
+
+    /* offline cache: keep what this session learned, without the network */
+    offcache_emergency_save();
 
     /*
      * Can't figure out why this section is inside the ifdef, but no

@@ -332,6 +332,12 @@
 #define GLO_NMW_WIDTH		     vars[V_NMW_WIDTH].global_val.p
 #define VAR_USERINPUTTIMEO     	     vars[V_USERINPUTTIMEO].current_val.p
 #define GLO_USERINPUTTIMEO     	     vars[V_USERINPUTTIMEO].global_val.p
+#define VAR_OFFCACHE_FOLDER_MB	     vars[V_OFFCACHE_FOLDER_MB].current_val.p
+#define GLO_OFFCACHE_FOLDER_MB	     vars[V_OFFCACHE_FOLDER_MB].global_val.p
+#define VAR_OFFCACHE_TOTAL_MB	     vars[V_OFFCACHE_TOTAL_MB].current_val.p
+#define GLO_OFFCACHE_TOTAL_MB	     vars[V_OFFCACHE_TOTAL_MB].global_val.p
+#define VAR_OFFCACHE_MAX_AGE	     vars[V_OFFCACHE_MAX_AGE].current_val.p
+#define GLO_OFFCACHE_MAX_AGE	     vars[V_OFFCACHE_MAX_AGE].global_val.p
 #define VAR_TCPOPENTIMEO	     vars[V_TCPOPENTIMEO].current_val.p
 #define VAR_TCPREADWARNTIMEO	     vars[V_TCPREADWARNTIMEO].current_val.p
 #define VAR_TCPWRITEWARNTIMEO	     vars[V_TCPWRITEWARNTIMEO].current_val.p

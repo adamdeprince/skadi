@@ -675,7 +675,8 @@ struct key index_keys[] =
 	RCOMPOSE_MENU,
 	HOMEKEY_MENU,
 	ENDKEY_MENU,
-	NULL_MENU,
+	/* TRANSLATORS: apply offline changes / refresh the offline cache */
+	{"K",N_("sYnc"),{MC_SYNC,1,{'k'}},KS_NONE},
 	/* TRANSLATORS: toggles a collapsed view or an expanded view
 	   of a message thread on and off */
 	{"/",N_("Collapse/Expand"),{MC_COLLAPSE,1,{'/'}},KS_NONE},

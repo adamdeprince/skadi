@@ -23,6 +23,7 @@
 #include "../pith/body.h"
 #include "../pith/offcache.h"
 #include "../pith/kittyimg.h"
+#include "../pith/outbox.h"
 
 #include "osdep/debuging.h"
 #include "osdep/termout.gen.h"
@@ -470,6 +471,14 @@ main(int argc, char **argv)
     init_vars(pine_state, process_init_cmds);
     offcache_init();
     offcache_load_all();
+    {
+	int nq = outbox_count();
+
+	if(nq > 0)
+	  q_status_message1(SM_ORDER, 0, 4,
+	     _("%s message(s) waiting in the outbox will be sent when connected"),
+	     comatose((long) nq));
+    }
 
     rv = F_ON(F_GRAPH_PREFER_PLAIN_TEXT, ps_global) ? 1 : 0;
     mail_parameters(NULL, SET_PREFERPLAINTEXT, (void *)(long) rv);

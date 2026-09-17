@@ -401,6 +401,12 @@ CONF_TXT_T cf_text_nmw_width[] = "Sets the width for the NewMail screen.";
 
 CONF_TXT_T cf_text_user_input_timeo[] =	"If no user input for this many hours, Alpine will exit if in an idle loop\n# waiting for a new command.  If set to zero (the default), then there will\n# be no timeout.";
 
+CONF_TXT_T cf_text_offcache_folder_mb[] =	"Largest amount of message body text, in megabytes, kept in the offline\n# cache for any one folder.  Default is 32.";
+
+CONF_TXT_T cf_text_offcache_total_mb[] =	"Largest amount of message body text, in megabytes, kept in the offline\n# cache for all folders together.  Default is 256.";
+
+CONF_TXT_T cf_text_offcache_max_age[] =	"Cached folders that have not been opened for this many days are\n# discarded at startup.  Zero keeps them forever.  Default is 90.";
+
 CONF_TXT_T cf_text_debug_mem[] =	"Debug-memory is obsolete";
 
 CONF_TXT_T cf_text_tcp_open_timeo[] =	"Sets the time in seconds that Alpine will attempt to open a network\n# connection.  The default is 30, the minimum is 5, and the maximum is\n# system defined (typically 75).";
@@ -749,6 +755,12 @@ static struct variable variables[] = {
 	NULL,			cf_text_oper_dir},
 {"user-input-timeout",			0, 1, 0, 1, 1, 0, 0, 0, 0, 1, 0,
 	NULL,			cf_text_user_input_timeo},
+{"offline-cache-folder-max-mb",		0, 1, 0, 1, 1, 0, 0, 0, 0, 1, 0,
+	NULL,			cf_text_offcache_folder_mb},
+{"offline-cache-total-max-mb",		0, 1, 0, 1, 1, 0, 0, 0, 0, 1, 0,
+	NULL,			cf_text_offcache_total_mb},
+{"offline-cache-max-age-days",		0, 1, 0, 1, 1, 0, 0, 0, 0, 1, 0,
+	NULL,			cf_text_offcache_max_age},
 /* OBSOLETE */
 #ifdef DEBUGJOURNAL
 {"debug-memory",			1, 1, 0, 1, 1, 0, 0, 0, 0, 1, 0,
@@ -1702,6 +1714,9 @@ init_vars(struct pine *ps, void (*cmds_f) (struct pine *, char **))
     GLO_STATUS_MSG_DELAY	= cpystr("0");
     GLO_ACTIVE_MSG_INTERVAL	= cpystr("12");
     GLO_USERINPUTTIMEO		= cpystr("0");
+    GLO_OFFCACHE_FOLDER_MB	= cpystr("32");
+    GLO_OFFCACHE_TOTAL_MB	= cpystr("256");
+    GLO_OFFCACHE_MAX_AGE	= cpystr("90");
     GLO_INCCHECKTIMEO		= cpystr("5");
     GLO_INCCHECKINTERVAL	= cpystr("180");
     GLO_INC2NDCHECKINTERVAL	= cpystr("180");
@@ -3128,6 +3143,8 @@ feature_list(int index)
 	 F_KITTY_INLINE_IMAGES, h_config_kitty_inline_images, PREF_VIEW, 1},
 	{"enable-offline-cache", "Enable Offline Cache",
 	 F_OFFLINE_CACHE, h_config_offline_cache, PREF_FLDR, 1},
+	{"offline-cache-open-first", "Offline Cache Opens Before Connecting",
+	 F_OFFLINE_CACHE_FIRST, h_config_offline_cache_first, PREF_FLDR, 0},
 	/* set to TRUE for windows */
 	{"pass-c1-control-characters-as-is", NULL,
 	 F_PASS_C1_CONTROL_CHARS, h_config_pass_c1_control, PREF_VIEW, 0},
@@ -8006,6 +8023,12 @@ config_help(int var, int feature)
 	return(h_config_ssh_open_timeo);
       case V_USERINPUTTIMEO :
 	return(h_config_user_input_timeo);
+      case V_OFFCACHE_FOLDER_MB :
+	return(h_config_offcache_folder_mb);
+      case V_OFFCACHE_TOTAL_MB :
+	return(h_config_offcache_total_mb);
+      case V_OFFCACHE_MAX_AGE :
+	return(h_config_offcache_max_age);
       case V_REMOTE_ABOOK_VALIDITY :
 	return(h_config_remote_abook_validity);
       case V_REMOTE_ABOOK_HISTORY :

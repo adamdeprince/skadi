@@ -25,6 +25,7 @@
 #include "../pith/news.h"
 #include "../pith/util.h"
 #include "../pith/folder.h"
+#include "../pith/offcache.h"
 
 /*
  * Internal prototypes
@@ -260,6 +261,16 @@ set_titlebar(char *title, MAILSTREAM *stream, CONTEXT_S *cntxt, char *folder,
 
     if(!as.folder_name)
       as.folder_name = cpystr("");
+
+    /* reading the offline cache rather than the server */
+    if(offcache_is_stream(as.stream)){
+	size_t l = strlen(as.folder_name) + 12;
+	char *tagged = (char *) fs_get(l);
+
+	snprintf(tagged, l, "%s [offline]", as.folder_name);
+	fs_give((void **) &as.folder_name);
+	as.folder_name = tagged;
+    }
 
     if(as.context_name)
       fs_give((void **)&as.context_name);

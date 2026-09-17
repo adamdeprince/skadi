@@ -229,6 +229,7 @@ void	    update_answered_flags(REPLY_S *);
 int         call_mailer(METAENV *, BODY *, char *, char **, int,
 			void (*)(char *, int), void (*)(PIPE_S *, int, void *));
 int         write_postponed(METAENV *, BODY *);
+int         write_draft_to_folder(METAENV *, BODY *, char *, char *, int);
 int         commence_fcc(char *, CONTEXT_S **, int);
 int         wrapup_fcc(char *, CONTEXT_S *, METAENV *, BODY *);
 STORE_S	   *open_fcc(char *, CONTEXT_S **, int, char *, char *);
