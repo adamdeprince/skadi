@@ -116,6 +116,12 @@ setup_html_esc_seq(void)
     kpinsert("\033o", META|'o', 1);
     kpinsert("\033k", META|'k', 1);
     kpinsert("\033K", META|'k', 1);
+    kpinsert("\033m", META|'m', 1);
+    kpinsert("\033M", META|'m', 1);
+    kpinsert("\033v", META|'v', 1);
+    kpinsert("\033V", META|'v', 1);
+    kpinsert("\033g", META|'g', 1);
+    kpinsert("\033G", META|'g', 1);
 }
 
 

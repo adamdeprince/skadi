@@ -15952,7 +15952,8 @@ EXIT COMMANDS    |  GENERAL COMMANDS    | ^T     To Addressbook
 <!--chtml endif-->
 <P>
 HTML markup (Alt plus a letter; kitty and other modern terminals report
-Alt as a modifier). Mark a region with ^^ first to wrap existing text;
+Alt as a modifier; on macOS set the terminal to send Option as Alt,
+in kitty <TT>macos_option_as_alt yes</TT>). Mark a region with ^^ first to wrap existing text;
 with no region the inline commands insert an empty pair of tags and
 leave the cursor between them. Pressing the same command again while
 inside such a span removes the tags again.

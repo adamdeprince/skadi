@@ -363,7 +363,9 @@ read_char(int time_out)
 	  time_out = 1;
     }
 
-    if((ch = check_for_timeout(time_out)) != READY_TO_READ)
+    if(kb_pending())
+      ch = READY_TO_READ;
+    else if((ch = check_for_timeout(time_out)) != READY_TO_READ)
       goto done;
     
     switch(status = kbseq(pine_simple_ttgetc, key_rec, read_bail,

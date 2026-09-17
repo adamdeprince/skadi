@@ -29,6 +29,7 @@ void	      pico_paste_clear_fresh(void);
 UCS	     *pico_paste_ucs4(int *);
 void	      pico_paste_discard(void);
 int	      pico_paste_queued(void);
+int	      kb_pending(void);
 UCS	      pico_paste_take(void);
 UCS	      pico_paste_take_raw(void);
 int	      pico_paste_collect(int (*)(int (*)(int), void (*)(void)),

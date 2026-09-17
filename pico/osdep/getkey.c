@@ -319,7 +319,7 @@ GetKey(void)
 	return(pc ? pc : NODATA);
     }
 
-    if(!ReadyForKey(FUDGE-5))
+    if(!kb_pending() && !ReadyForKey(FUDGE-5))
       return(NODATA);
 
     switch(status = kbseq(simple_ttgetc, NULL, bail, input_cs, &ch)){
@@ -561,17 +561,49 @@ GetKey(void)
  */
 #define KB_SEQMAX	64
 #define KB_ESC_MS	50		/* ESC then a key within this is Alt+key */
+#define KB_ESC2_MS	1000		/* lone ESC then ESC within this: ESC ESC x */
 
 
 /*
  * Is there input within ms milliseconds?
  */
+/*
+ * One byte of pushback for kbseq: after a lone ESC we look at the next
+ * byte to keep the "ESC ESC x" control-key fallback working; when that
+ * byte is not another ESC it is handed to the following kbseq call.
+ */
+static int kb_pushback = -1;
+
+int
+kb_pending(void)
+{
+    return(kb_pushback >= 0);
+}
+
+static int
+kb_next(int (*getcfunc)(int (*)(int), void (*)(void)),
+	int (*recorder)(int), void (*bail_handler)(void))
+{
+    int c;
+
+    if(kb_pushback >= 0){
+	c = kb_pushback;
+	kb_pushback = -1;
+	return(c);
+    }
+
+    return((*getcfunc)(recorder, bail_handler));
+}
+
 static int
 kb_ready_ms(int ms)
 {
     fd_set rfds;
     struct timeval tv;
     int res;
+
+    if(kb_pushback >= 0)
+      return(1);
 
     for(;;){
 	FD_ZERO(&rfds);
@@ -940,7 +972,7 @@ kbseq(int (*getcfunc)(int (*recorder)(int ), void (*bail_handler)(void )),
       return(BADESC);
 
     while(1){
-	c = (*getcfunc)(recorder, bail_handler);
+	c = kb_next(getcfunc, recorder, bail_handler);
 	if(nseen < KB_SEQMAX - 1)
 	  seen[nseen++] = c;
 
@@ -949,8 +981,24 @@ kbseq(int (*getcfunc)(int (*recorder)(int ), void (*bail_handler)(void )),
 	 * not the start of an Alt+key or terminal sequence.
 	 */
 	if(first && c == '\033' && !kb_ready_ms(KB_ESC_MS)){
-	    *ch = 27;
-	    return(0);
+	    /*
+	     * Lone Escape.  Allow a human-speed second ESC so that the
+	     * documented "ESC ESC x" control-key fallback still works;
+	     * any other byte typed in that window is pushed back for the
+	     * next call.
+	     */
+	    if(kb_ready_ms(KB_ESC2_MS)){
+		kb_pushback = (*getcfunc)(recorder, bail_handler);
+		if(kb_pushback != '\033'){
+		    *ch = 27;
+		    return(0);
+		}
+		/* second ESC: fall through so the trie sees ESC ESC */
+	    }
+	    else{
+		*ch = 27;
+		return(0);
+	    }
 	}
 
 	while(current->value != c){
@@ -1117,6 +1165,12 @@ kbdestroy(KBESC_T *kb)
 }
 
 #else /* _WINDOWS */
+
+int
+kb_pending(void)
+{
+    return(0);
+}
 
 int
 pico_paste_is_fresh(void)
