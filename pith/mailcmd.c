@@ -34,6 +34,7 @@
 #include "../pith/icache.h"
 #include "../pith/ablookup.h"
 #include "../pith/search.h"
+#include "../pith/offcache.h"
 #include "../pith/charconv/utf8.h"
 
 #ifdef _WINDOWS
@@ -780,21 +781,105 @@ do_broach_folder(char *newfolder, CONTEXT_S *new_context, MAILSTREAM **streamp,
      */
     ps_global->user_says_cancel = 0;
 
-    m = context_open((new_context && !open_inbox) ? new_context : NULL,
-		     stream, 
-		     open_inbox ? ps_global->VAR_INBOX_PATH : expanded_file,
-		     openmode | (open_inbox ? SP_INBOX : 0),
-		     &rflags);
+    {
+	char *open_name = open_inbox ? ps_global->VAR_INBOX_PATH : expanded_file;
+	char *cache_name = NULL;
+	int   remote, has_cache, use_cache, skip_live;
 
-    if(m == NULL
-	&& ps_global->in_xoauth2_auth
-	&& ps_global->preserve_password){
-        ps_global->in_xoauth2_auth = ps_global->user_says_cancel = ps_global->preserve_password = 0;
-        m = context_open((new_context && !open_inbox) ? new_context : NULL,
-		     stream,
-		     open_inbox ? ps_global->VAR_INBOX_PATH : expanded_file,
-		     openmode | (open_inbox ? SP_INBOX : 0),
-		     &rflags);
+	remote = (open_name && IS_REMOTE(open_name));
+	has_cache = remote && offcache_has_folder(open_name);
+	use_cache = 0;
+	skip_live = 0;
+
+	if(offcache_enabled() && remote){
+	    if(has_cache && !do_reopen && !offcache_network_ok())
+	      use_cache = 1;
+	    else if((flags & DB_STARTUP) && !has_cache)
+	      skip_live = 1;
+	}
+
+	if(use_cache){
+	    cache_name = offcache_name_for(open_name);
+	    m = pine_mail_open(stream, cache_name,
+			       openmode | (open_inbox ? SP_INBOX : 0),
+			       &rflags);
+	    if(cache_name)
+	      fs_give((void **) &cache_name);
+
+	    if(m && !m->halfopen)
+	      q_status_message(SM_ORDER, 0, 3,
+		   _("Opened offline cache (not connected)"));
+	}
+	else if(skip_live){
+	    if(we_cancel)
+	      cancel_busy_cue(-1);
+
+	    if(old_folder)
+	      fs_give((void **)&old_folder);
+
+	    if(old_path)
+	      fs_give((void **)&old_path);
+
+	    q_status_message(SM_ORDER, 0, 4,
+		 _("Not connecting at startup. Compose is available; open the folder when the link is up."));
+	    return(1);
+	}
+	else{
+	    void *oldto = NULL;
+	    int   shortened = 0;
+
+	    if(has_cache){
+		oldto = mail_parameters(NULL, GET_OPENTIMEOUT, NULL);
+		if(oldto && (long) oldto > 8L){
+		    mail_parameters(NULL, SET_OPENTIMEOUT, (void *) 8L);
+		    shortened = 1;
+		}
+	    }
+
+	    m = context_open((new_context && !open_inbox) ? new_context : NULL,
+			     stream,
+			     open_name,
+			     openmode | (open_inbox ? SP_INBOX : 0),
+			     &rflags);
+
+	    if(m == NULL
+	       && ps_global->in_xoauth2_auth
+	       && ps_global->preserve_password){
+		ps_global->in_xoauth2_auth = ps_global->user_says_cancel
+					     = ps_global->preserve_password = 0;
+		m = context_open((new_context && !open_inbox)
+				   ? new_context : NULL,
+				 stream,
+				 open_name,
+				 openmode | (open_inbox ? SP_INBOX : 0),
+				 &rflags);
+	    }
+
+	    if(shortened)
+	      mail_parameters(NULL, SET_OPENTIMEOUT, oldto);
+
+	    if(m && !m->halfopen && !offcache_is_stream(m)){
+		offcache_note_live();
+		offcache_apply_dirty_flags(m);
+	    }
+	    else if((m == NULL || m->halfopen) && has_cache){
+		if(m){
+		    pine_mail_actually_close(m);
+		    m = NULL;
+		}
+
+		cache_name = offcache_name_for(open_name);
+		m = pine_mail_open(NULL, cache_name,
+				   openmode | (open_inbox ? SP_INBOX : 0),
+				   &rflags);
+		if(cache_name)
+		  fs_give((void **) &cache_name);
+
+		if(m && !m->halfopen)
+		  q_status_message(SM_ORDER | SM_DING, 0, 4,
+		       _("Server unreachable; opened offline cache"));
+	    }
+	}
     }
 
     /*
@@ -1396,6 +1481,9 @@ expunge_and_close(MAILSTREAM *stream, char **final_msg, long unsigned int flags)
 
     if(!(stream && sp_flagged(stream, SP_LOCKED)))
       stream = NULL;
+
+    if(stream)
+      offcache_learn_stream(stream);
 
     /* check for dead stream */
     if(stream && sp_dead_stream(stream)){

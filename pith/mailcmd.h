@@ -41,6 +41,7 @@
 #define DB_NOVISIT	0x01	/* this is a preopen, not a real visit */
 #define DB_FROMTAB	0x02	/* opening because of TAB command      */
 #define DB_INBOXWOCNTXT	0x04	/* interpret inbox as one true inbox */
+#define DB_STARTUP	0x08	/* first open this process; do not block on the network */
 
 
 /*

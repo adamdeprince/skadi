@@ -3109,6 +3109,8 @@ feature_list(int index)
 	 F_EXTERNAL_INLINE_IMAGES, h_external_loads_inline_images_only, PREF_VIEW, 1},
 	{"enable-kitty-inline-images", "Enable Kitty Inline Images",
 	 F_KITTY_INLINE_IMAGES, h_config_kitty_inline_images, PREF_VIEW, 1},
+	{"enable-offline-cache", "Enable Offline Cache",
+	 F_OFFLINE_CACHE, h_config_offline_cache, PREF_FLDR, 1},
 	/* set to TRUE for windows */
 	{"pass-c1-control-characters-as-is", NULL,
 	 F_PASS_C1_CONTROL_CHARS, h_config_pass_c1_control, PREF_VIEW, 0},

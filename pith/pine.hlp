@@ -641,6 +641,15 @@ Additions include:
      <a href="h_config_kitty_inline_images"><!--#echo var="FEAT_enable-kitty-inline-images"--></a>
      (enabled by default).
 
+<LI> Alpine keeps an offline cache of remote folders it has already
+     opened. Envelopes, flags, headers, and message bodies that have
+     been fetched are held in memory and written once when Alpine
+     exits. The next session opens that cache immediately and does
+     not contact the server until you reopen a folder. Compose works
+     without a network connection. This is controlled by
+     <a href="h_config_offline_cache"><!--#echo var="FEAT_enable-offline-cache"--></a>
+     (enabled by default).
+
 <LI> Alpine can pass an HTML message to an external web browser, by using the
      &quot;External&quot; command in the <a href="h_attachment_screen">ATTACHMENT INDEX</a>
      screen. <A href="h_command_external_browser">Learn more</A>.
@@ -5398,6 +5407,7 @@ There are also additional details on
 <li><a href="h_config_enable_incoming_checking">FEATURE: <!--#echo var="FEAT_enable-incoming-folders-checking"--></a>
 <li><a href="h_config_enable_jump">FEATURE: <!--#echo var="FEAT_enable-jump-shortcut"--></a>
 <li><a href="h_config_kitty_inline_images">FEATURE: <!--#echo var="FEAT_enable-kitty-inline-images"--></a>
+<li><a href="h_config_offline_cache">FEATURE: <!--#echo var="FEAT_enable-offline-cache"--></a>
 <li><a href="h_config_show_delay_cue">FEATURE: <!--#echo var="FEAT_enable-mail-check-cue"--></a>
 <li><a href="h_config_mailcap_params">FEATURE: <!--#echo var="FEAT_enable-mailcap-param-substitution"--></a>
 <li><a href="h_config_enable_mouse">FEATURE: <!--#echo var="FEAT_enable-mouse-in-xterm"--></a>
@@ -32321,7 +32331,40 @@ Under tmux, kitty images need passthrough
 (<TT>set -g allow-passthrough on</TT>). Sixel support requires a tmux
 new enough to display sixels natively.
 <P>
+&lt;End of help on this topic&gt;
+</BODY>
+</HTML>
+====== h_config_offline_cache =====
+<HTML>
+<HEAD>
+<TITLE>FEATURE: <!--#echo var="FEAT_enable-offline-cache"--></TITLE>
+</HEAD>
+<BODY>
+<H1>FEATURE: <!--#echo var="FEAT_enable-offline-cache"--></H1>
+
+When this feature is enabled, Alpine remembers remote folders it has
+already opened so you can read them later without a network connection.
 <P>
+The cache is kept in memory while Alpine is running. It is written to
+<TT>~/.alpine-offcache</TT> only when Alpine exits, and only if something
+changed. That avoids constant disk writes on devices with limited flash
+storage.
+<P>
+At startup Alpine opens the cached copy of INBOX if one exists, and does
+not contact the IMAP server. Compose does not probe remote postponed or
+form-letter folders until a live connection has been made in this session.
+<P>
+To fetch new mail, reopen the folder (Alpine will offer this when checking
+for new mail on a cached folder). If the server cannot be reached, Alpine
+falls back to the cache. Flag changes made while offline are stored in
+the cache and applied the next time the live folder is opened.
+<P>
+Message bodies are cached only after they have been viewed, up to 32 MB
+per folder. Messages that have never been opened show their headers and a
+note that the body is not cached.
+<P>
+This feature is on by default. Turn it off if you always want Alpine to
+open the server at startup.
 <P>
 &lt;End of help on this topic&gt;
 </BODY>

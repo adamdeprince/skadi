@@ -59,6 +59,7 @@
 #include "../pith/mimetype.h"
 #include "../pith/send.h"
 #include "../pith/smime.h"
+#include "../pith/offcache.h"
 
 
 typedef struct body_particulars {
@@ -304,7 +305,8 @@ compose_mail(char *given_to, char *fcc_arg, ACTION_S *role_arg,
        && !outgoing				/* not replying/forwarding */
        && !(given_to || attach)			/* not command line send */
        && ps_global->VAR_POSTPONED_FOLDER	/* folder to look in */
-       && ps_global->VAR_POSTPONED_FOLDER[0])
+       && ps_global->VAR_POSTPONED_FOLDER[0]
+       && !offcache_skip_remote_probe(ps_global->VAR_POSTPONED_FOLDER))
       postponed = 1;
 
     /*-- Check for form letter folder --*/
@@ -312,7 +314,8 @@ compose_mail(char *given_to, char *fcc_arg, ACTION_S *role_arg,
        && !outgoing				/* not replying/forwarding */
        && !(given_to || attach)			/* not command line send */
        && ps_global->VAR_FORM_FOLDER		/* folder to look in */
-       && ps_global->VAR_FORM_FOLDER[0])
+       && ps_global->VAR_FORM_FOLDER[0]
+       && !offcache_skip_remote_probe(ps_global->VAR_FORM_FOLDER))
       form = 1;
 
     if(!outgoing && !(given_to || attach)

@@ -21,6 +21,7 @@
 #include "../pith/list.h"
 #include "../pith/conf.h"
 #include "../pith/body.h"
+#include "../pith/offcache.h"
 
 #include "osdep/debuging.h"
 #include "osdep/termout.gen.h"
@@ -409,6 +410,7 @@ main(int argc, char **argv)
 
     /*------- Set up c-client drivers -------*/ 
 #include "../c-client/linkage.c"
+    offcache_link_driver();
 
     /*------- ... then tune the drivers just installed -------*/ 
 #ifdef	_WINDOWS
@@ -465,6 +467,8 @@ main(int argc, char **argv)
 	ps_global->s_pool.max_remstream));
 
     init_vars(pine_state, process_init_cmds);
+    offcache_init();
+    offcache_load_all();
 
     rv = F_ON(F_GRAPH_PREFER_PLAIN_TEXT, ps_global) ? 1 : 0;
     mail_parameters(NULL, SET_PREFERPLAINTEXT, (void *)(long) rv);
@@ -1351,7 +1355,8 @@ main(int argc, char **argv)
 		    }
 
 		    do_broach_folder(pine_state->inbox_name, 
-				     pine_state->context_list, NULL, DB_INBOXWOCNTXT);
+				     pine_state->context_list, NULL,
+				     DB_INBOXWOCNTXT | DB_STARTUP);
     		}
 		else
 		  q_status_message(SM_ORDER, 0, 2 ,_("No folder opened"));
@@ -1369,9 +1374,10 @@ main(int argc, char **argv)
 		pine_state->mangled_footer = 1;
 	    }
 
-	    /* open inbox */
+	    /* open inbox, from cache if we have one; do not block on the network */
             do_broach_folder(pine_state->inbox_name,
-			     pine_state->context_list, NULL, DB_INBOXWOCNTXT);
+			     pine_state->context_list, NULL,
+			     DB_INBOXWOCNTXT | DB_STARTUP);
         }
 
         if(pine_state->mangled_footer)
@@ -1551,7 +1557,7 @@ preopen_stayopen_folders(void)
     for(open_these = ps_global->VAR_PERMLOCKED;
 	open_these && *open_these; open_these++)
       (void) do_broach_folder(*open_these, ps_global->context_list,
-			      NULL, DB_NOVISIT);
+			      NULL, DB_NOVISIT | DB_STARTUP);
 }
 
 
@@ -3374,6 +3380,9 @@ goodnight_gracey(struct pine *pine_state, int exit_val)
 	msg[sizeof(msg)-1] = '\0';
 	fs_give((void **)&final_msg);
     }
+
+    dprint((7, "goodnight_gracey: save offline cache\n"));
+    offcache_save_all();
 
     dprint((7, "goodnight_gracey: sp_end\n"));
     ps_global->noshow_error = 1;

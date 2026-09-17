@@ -26,6 +26,7 @@
 #include "../pith/status.h"
 #include "../pith/busy.h"
 #include "../pith/mailindx.h"
+#include "../pith/offcache.h"
 
 
 typedef struct _build_folder_list_data {
@@ -2141,6 +2142,7 @@ folder_unseen_count_updater(unsigned long flags)
    * user wants us to monitor, and we're in the folder screen.
    */
   if(ps_global->in_folder_screen && F_ON(F_ENABLE_INCOMING_CHECKING, ps_global)
+     && (offcache_network_ok() || !offcache_enabled())
      && (ctxt=ps_global->context_list) && ctxt->use & CNTXT_INCMNG
      && (ftotal = folder_total(FOLDERS(ctxt)))){
     /*
