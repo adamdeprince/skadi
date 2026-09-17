@@ -2172,20 +2172,39 @@ call_mailer(METAENV *header, struct mail_bodystruct *body,
 int
 write_postponed(METAENV *header, struct mail_bodystruct *body)
 {
+    if(!ps_global->VAR_POSTPONED_FOLDER
+       || !ps_global->VAR_POSTPONED_FOLDER[0]){
+	q_status_message(SM_ORDER | SM_DING, 3, 3,
+			 _("No postponed file defined"));
+	return(-1);
+    }
+
+    return(write_draft_to_folder(header, body, ps_global->VAR_POSTPONED_FOLDER,
+				 "postponed message", 0));
+}
+
+
+/*
+ * Write a composed message to a folder in the form redraft() can read
+ * back.  with_servers also records the role's sending servers so an
+ * unattended resend (the outbox) uses them.  Returns 0 on success.
+ */
+int
+write_draft_to_folder(METAENV *header, struct mail_bodystruct *body,
+		      char *folder_name, char *label, int with_servers)
+{
     char      **pp, *folder;
     int		rv = 0, sz;
     CONTEXT_S  *fcc_cntxt = NULL;
     PINEFIELD *pf;
     static char *writem[] = {"To", "References", "Fcc", "X-Reply-UID", NULL};
+    static char *servers[] = {"X-SMTP-Server", "X-SEND-Server",
+			      "X-NNTP-Server", NULL};
 
-    if(!ps_global->VAR_POSTPONED_FOLDER
-       || !ps_global->VAR_POSTPONED_FOLDER[0]){
-	q_status_message(SM_ORDER | SM_DING, 3, 3, 
-			 _("No postponed file defined"));
-	return(-1);
-    }
+    if(!(header && body && folder_name && folder_name[0]))
+      return(-1);
 
-    folder = cpystr(ps_global->VAR_POSTPONED_FOLDER);
+    folder = cpystr(folder_name);
 
     lmc.all_written = lmc.text_written = lmc.text_only = 0;
 
@@ -2193,13 +2212,22 @@ write_postponed(METAENV *header, struct mail_bodystruct *body)
 
     if(lmc.so){
 	/* BUG: writem sufficient ? */
-	for(pf = header->local; pf && pf->name; pf = pf->next)
-	  for(pp = writem; *pp; pp++)
-	    if(!strucmp(pf->name, *pp)){
-		pf->localcopy = 1;
-		pf->writehdr = 1;
-		break;
-	    }
+	for(pf = header->local; pf && pf->name; pf = pf->next){
+	    for(pp = writem; *pp; pp++)
+	      if(!strucmp(pf->name, *pp)){
+		  pf->localcopy = 1;
+		  pf->writehdr = 1;
+		  break;
+	      }
+
+	    if(with_servers)
+	      for(pp = servers; *pp; pp++)
+		if(!strucmp(pf->name, *pp)){
+		    pf->localcopy = 1;
+		    pf->writehdr = 1;
+		    break;
+		}
+	}
 
 	/*
 	 * Work around c-client reply-to bug. C-client will
@@ -2253,7 +2281,7 @@ write_postponed(METAENV *header, struct mail_bodystruct *body)
 	}
 
 	if(pine_rfc822_output(header, body, NULL, NULL) < 0
-	   || write_fcc(folder, fcc_cntxt, lmc.so, NULL, "postponed message", NULL) < 0)
+	   || write_fcc(folder, fcc_cntxt, lmc.so, NULL, label, NULL) < 0)
 	  rv = -1;
 
 	so_give(&lmc.so);

@@ -61,6 +61,7 @@
 #include "../pith/smime.h"
 #include "../pith/htmlbody.h"
 #include "../pith/offcache.h"
+#include "../pith/outbox.h"
 #include "../pith/goblindl.h"
 
 
@@ -4121,6 +4122,17 @@ pine_send(ENVELOPE *outgoing, struct mail_bodystruct **body,
 				     pine_send_status(result, fcc,
 						      tmp_20k_buf, SIZEOF_20KBUF, NULL));
 		}
+
+		/*
+		 * Offer to park the message in the local outbox; it goes
+		 * out through the normal path when a connection is made.
+		 */
+		if((result & P_MAIL_LOSE) && !(result & P_FCC_LOSE)
+		   && offcache_enabled() && !ps_global->in_init_seq
+		   && want_to(_("Sending failed. Queue the message in the outbox to send later"),
+			      'y', 'n', NO_HELP, WT_NORM) == 'y'
+		   && outbox_queue(&header, *body) == 0)
+		  break;			/* queued: leave the composer */
 
 		if(outgoing->message_id)
 		  fs_give((void **) &outgoing->message_id);
