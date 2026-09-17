@@ -2060,5 +2060,8 @@ char *oauth2_generate_state(void);
 void oauth2_code_challenge(OAUTH2_S *);
 void oauth2_free_extra_values(OAUTH2_S *);
 void oauth2_login_hint(OAUTH2_S *, char *);
+int  oauth2_loopback_start(OAUTH2_S *);
+char *oauth2_loopback_wait(int);
+void oauth2_loopback_stop(void);
 void renew_accesstoken(MAILSTREAM *);
 XOAUTH2_INFO_S **parse_xoauth2_info_list(char **, int *);

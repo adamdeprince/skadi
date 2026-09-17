@@ -24,6 +24,9 @@
 #include "headers.h"
 #include "alpine.h"
 #include "imap.h"
+#ifndef _WINDOWS
+#include <sys/wait.h>
+#endif
 #include "status.h"
 #include "mailview.h"
 #include "mailcmd.h"
@@ -543,6 +546,39 @@ try_wantto:
    }
 }
 
+static void
+oauth2_open_browser(char *url)
+{
+#ifndef _WINDOWS
+    pid_t pid;
+
+    if(!url || !*url)
+      return;
+
+    if(ps_global->VAR_BROWSER && ps_global->VAR_BROWSER[0]
+       && ps_global->VAR_BROWSER[0][0]){
+	(void) do_url_launch(ps_global->VAR_BROWSER[0], url);
+	return;
+    }
+
+    pid = fork();
+    if(pid == 0){
+	pid_t g = fork();
+	if(g > 0)
+	  _exit(0);
+#ifdef __APPLE__
+	execl("/usr/bin/open", "open", url, (char *) NULL);
+#else
+	execl("/usr/bin/xdg-open", "xdg-open", url, (char *) NULL);
+#endif
+	_exit(127);
+    }
+    else if(pid > 0)
+      (void) waitpid(pid, NULL, 0);
+#endif
+}
+
+
 char *
 oauth2_get_access_code(unsigned char *url, char *method, OAUTH2_S *oauth2, NETMBX *mb, int *tryanother)
 {
@@ -551,6 +587,18 @@ oauth2_get_access_code(unsigned char *url, char *method, OAUTH2_S *oauth2, NETMB
 
    dprint((2, "-- oauth2_get_access_code\n"));
    ps_global->in_xoauth2_auth = 1;
+
+   /*
+    * Google redirects to http://127.0.0.1:port/ with the code.
+    * Catch it here so the user is not stuck on a dead localhost page.
+    */
+   oauth2_open_browser((char *) url);
+   q_status_message(SM_ORDER, 3, 5,
+	_("Log in with Google in your browser. Alpine is waiting..."));
+   code = oauth2_loopback_wait(120);
+   if(code)
+     return(code);
+
    if(ps_global->ttyo){
 	SCROLL_S  sargs;
 	STORE_S  *in_store, *out_store;
@@ -596,9 +644,8 @@ oauth2_get_access_code(unsigned char *url, char *method, OAUTH2_S *oauth2, NETMB
 	   so_puts(in_store, _(" Alternatively, you can copy and paste the previous link and open it with the browser of your choice."));
 
 	   so_puts(in_store, _("</P><P> After you open the previous link, you will be asked to authenticate and later to authorize access to Alpine. "));
-	   so_puts(in_store, _(" At the end of this process, you will be given an access code or redirected to a web page."));
-	   so_puts(in_store, _(" If you see a code, copy it and then press 'C', and enter the code at the prompt."));
-	   so_puts(in_store, _(" If you do not see a code, copy the url of the page you were redirected to and again press 'C' and copy and paste it into the prompt. "));
+	   so_puts(in_store, _(" Alpine listens on localhost for Google's redirect. The browser should show &quot;Alpine is authorized&quot; and this screen will continue."));
+	   so_puts(in_store, _(" If that does not happen, copy the address-bar URL (it contains code=...) and press 'C' to paste it."));
 
 	   cache_method_message(in_store);
 	}

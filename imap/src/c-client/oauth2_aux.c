@@ -24,6 +24,185 @@
 #include "json.h"
 #include "oauth2_aux.h"
 
+#if !defined(_MSC_VER) && !defined(_WINDOWS)
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <sys/select.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <string.h>
+#endif
+
+static int oauth2_lb_fd = -1;
+
+static void
+oauth2_url_decode(char *s)
+{
+    char *d, *p;
+    int v;
+
+    for(d = p = s; *p; ){
+	if(*p == '%' && isxdigit((unsigned char) p[1])
+	   && isxdigit((unsigned char) p[2])){
+	    sscanf(p + 1, "%2x", &v);
+	    *d++ = (char) v;
+	    p += 3;
+	}
+	else if(*p == '+'){
+	    *d++ = ' ';
+	    p++;
+	}
+	else
+	  *d++ = *p++;
+    }
+    *d = '\0';
+}
+
+
+int
+oauth2_loopback_start(OAUTH2_S *oauth2)
+{
+#if defined(_MSC_VER) || defined(_WINDOWS)
+    return(-1);
+#else
+    int fd, on = 1;
+    struct sockaddr_in addr;
+    socklen_t alen = sizeof(addr);
+    char redir[128];
+    unsigned port;
+
+    oauth2_loopback_stop();
+
+    fd = socket(AF_INET, SOCK_STREAM, 0);
+    if(fd < 0)
+      return(-1);
+
+    (void) setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = 0;
+    if(bind(fd, (struct sockaddr *) &addr, sizeof(addr)) < 0
+       || listen(fd, 4) < 0){
+	close(fd);
+	return(-1);
+    }
+
+    if(getsockname(fd, (struct sockaddr *) &addr, &alen) < 0){
+	close(fd);
+	return(-1);
+    }
+
+    port = (unsigned) ntohs(addr.sin_port);
+    snprintf(redir, sizeof(redir), "http://127.0.0.1:%u/", port);
+    /*
+     * Default redirect_uri is a static string in alpine_oauth2_list
+     * ("http://localhost").  Only free a previous loopback URI.
+     */
+    {
+	char *old = oauth2->param[OA2_Redirect].value;
+
+	oauth2->param[OA2_Redirect].value = cpystr(redir);
+	if(old && !strncmp(old, "http://127.0.0.1:", 17))
+	  fs_give((void **) &old);
+    }
+    oauth2_lb_fd = fd;
+    return(fd);
+#endif
+}
+
+
+void
+oauth2_loopback_stop(void)
+{
+#if !defined(_MSC_VER) && !defined(_WINDOWS)
+    if(oauth2_lb_fd >= 0){
+	close(oauth2_lb_fd);
+	oauth2_lb_fd = -1;
+    }
+#endif
+}
+
+
+char *
+oauth2_loopback_wait(int timeout_sec)
+{
+#if defined(_MSC_VER) || defined(_WINDOWS)
+    return(NULL);
+#else
+    time_t deadline;
+    char buf[8192], *p, *q, *code = NULL;
+    const char *ok =
+	"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n"
+	"Connection: close\r\n\r\n"
+	"<!DOCTYPE html><html><body style=\"font-family:sans-serif;padding:2em\">"
+	"<h2>Alpine is authorized</h2>"
+	"<p>You can close this tab and return to Alpine.</p>"
+	"</body></html>";
+    const char *nocontent =
+	"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n";
+
+    if(oauth2_lb_fd < 0)
+      return(NULL);
+
+    if(timeout_sec <= 0)
+      timeout_sec = 180;
+
+    deadline = time(0) + timeout_sec;
+    while(time(0) < deadline && !code){
+	fd_set rfds;
+	struct timeval tv;
+	int cfd, n, left;
+
+	left = (int) (deadline - time(0));
+	if(left < 1)
+	  break;
+
+	FD_ZERO(&rfds);
+	FD_SET(oauth2_lb_fd, &rfds);
+	tv.tv_sec = left > 5 ? 5 : left;
+	tv.tv_usec = 0;
+	if(select(oauth2_lb_fd + 1, &rfds, NULL, NULL, &tv) <= 0)
+	  continue;
+
+	cfd = accept(oauth2_lb_fd, NULL, NULL);
+	if(cfd < 0)
+	  continue;
+
+	n = (int) recv(cfd, buf, sizeof(buf) - 1, 0);
+	if(n <= 0){
+	    close(cfd);
+	    continue;
+	}
+
+	buf[n] = '\0';
+	p = strstr(buf, "code=");
+	if(!p){
+	    (void) send(cfd, nocontent, strlen(nocontent), 0);
+	    close(cfd);
+	    continue;
+	}
+
+	p += 5;
+	q = p;
+	while(*q && *q != '&' && *q != ' ' && *q != '\r' && *q != '\n')
+	  q++;
+
+	code = fs_get((size_t) (q - p + 1));
+	memcpy(code, p, (size_t) (q - p));
+	code[q - p] = '\0';
+	oauth2_url_decode(code);
+	(void) send(cfd, ok, strlen(ok), 0);
+	close(cfd);
+    }
+
+    return(code);
+#endif
+}
+
 OA2_type oauth2_find_extra_parameter(OAUTH2_S *, char *);
 JSON_S *oauth2_json_reply(OAUTH2_SERVER_METHOD_S, OAUTH2_S *, int *);
 char *xoauth2_server(char *, char *);
@@ -390,6 +569,9 @@ mm_login_oauth2_c_client_method (NETMBX *mb, char *user, char *method,
 
      mm_log("Starting AUTHORIZE method. No refresh token nor access token found.", (long) NIL);
 
+     if(strcmp(RefreshMethod.name, "GET") == 0)
+       (void) oauth2_loopback_start(oauth2);
+
      LOAD_HTTP_PARAMS(RefreshMethod, params);
 
      if(strcmp(RefreshMethod.name, "GET") == 0){
@@ -400,6 +582,11 @@ mm_login_oauth2_c_client_method (NETMBX *mb, char *user, char *method,
 
 	if(ogac)
 	  oauth2->param[OA2_Code].value = (*ogac)(url, method, oauth2, mb, tryanother);
+
+	if(!oauth2->param[OA2_Code].value)
+	  oauth2->param[OA2_Code].value = oauth2_loopback_wait(180);
+
+	oauth2_loopback_stop();
 
 	if(server) fs_give((void **) &server);
 	if(url) fs_give((void **) &url);
