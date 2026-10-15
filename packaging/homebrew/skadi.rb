@@ -27,9 +27,9 @@ class Skadi < Formula
            "--with-ssl-certs-dir=#{etc}/openssl@3/certs"
     # c-client's historical generated-file setup is not parallel-safe.
     # Build the client targets; Njord is an optional separate formula.
-    %w[pico pith alpine].each { |directory| system "make", "-C", directory }, "-j1", "c-client.d", "c-client"
+    %w[pith pico alpine].each { |directory| system "make", "-C", directory }, "-j1", "c-client.d", "c-client"
     # Build the client targets; Njord is an optional separate formula.
-    %w[pico pith alpine].each { |directory| system "make", "-C", directory }
+    %w[pith pico alpine].each { |directory| system "make", "-C", directory }
     bin.install "alpine/alpine" => "skadi"
     man1.install "doc/man1/alpine.1" => "skadi.1"
     doc.install "LICENSE", "NOTICE", "README"
