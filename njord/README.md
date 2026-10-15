@@ -1,84 +1,157 @@
-# Njord
+# Njord 0.1.0
 
-Njord is Skadi's companion IMAP proxy. This first version is a transparent,
-bidirectional relay. Each client gets its own upstream connection. Authentication,
-commands, literals, responses, and IDLE notifications belong to the client and
-provider; Njord does not interpret or record their contents.
-
-The low-bandwidth IMAP extension, compression, caching, reconnect logic, and
-satellite-specific optimizations are future work. An interrupted connection in
-this version disconnects the client; the client must reconnect.
+Njord is Skadi's optional IMAP proxy, written in C++17. Run it on your home
+Linux computer: Skadi uses checksummed **zstd level 22** frames to reach Njord,
+and Njord talks conventional IMAP to your provider. You can also use Skadi
+with a normal IMAP server directly; no Njord installation is required.
 
 ## Install
 
-Requires Python 3.8 or newer, with SSL support. There are no third-party Python
-dependencies. From the Skadi repository:
+Build dependencies: a C++17 compiler, Make, pkg-config, libevent 2.1,
+OpenSSL 1.1.1 or newer, zstd 1.4 or newer, libcurl and libwebp.
+Python is only a test harness dependency, never a runtime dependency.
 
 ```sh
+# Debian / Ubuntu
+sudo apt install build-essential pkg-config libevent-dev libssl-dev libzstd-dev libcurl4-openssl-dev libwebp-dev
+
+# macOS (use the same OpenSSL major version as libevent)
+brew install pkgconf libevent openssl@4 zstd webp
+
 make -C njord install PREFIX="$HOME/.local"
 "$HOME/.local/bin/njord" --version
 ```
 
-For a system installation, use `sudo make -C njord install PREFIX=/usr/local`.
-The normal configured Skadi `make install` also installs Njord. `DESTDIR`,
-`BINDIR`, and `MANDIR` are supported for packaging. Run
-`make -C njord uninstall` with the same directory variables to remove it.
+A configured Skadi `make install` also installs Njord. `DESTDIR`, `BINDIR` and
+`MANDIR` are supported; `make -C njord uninstall` removes the installed program.
+Binary packages install Skadi and Njord separately and never start a service.
 
-## Run
+## Connect
 
 ```sh
 njord --upstream imap.example.com
 ```
 
-Replace the hostname with the IMAP server supplied by your mail provider.
-The defaults are a plain local listener on `127.0.0.1:1143` and verified TLS
-to the provider on port 993. Configure the local mail client to use that
-listener and its normal provider credentials. Njord does not store credentials.
+The defaults are a loopback listener at `127.0.0.1:1143` and verified provider
+TLS on port 993. Use your provider's normal credentials in Skadi. For example:
 
-For clients connecting over a network, configure a TLS listener with a certificate
-whose name matches the hostname clients use:
+```
+# Normal IMAP, without Njord:
+{imap.example.com:993/ssl/user=you@example.com}INBOX
+
+# Njord on localhost, or forwarded through an SSH tunnel:
+{localhost:1143/njord/user=you@example.com}INBOX
+
+# Remote Njord with an implicit TLS listener:
+{home.example.com:1993/njord/ssl/user=you@example.com}INBOX
+```
+
+Configure a remote TLS listener with:
 
 ```sh
 njord --upstream imap.example.com --listen 0.0.0.0 --port 1993 \
   --certfile /etc/njord/fullchain.pem --keyfile /etc/njord/privkey.pem
 ```
 
-Alternatively, keep the default loopback listener and reach it through an
-encrypted tunnel. Do not send credentials over an unprotected network connection.
-Protect the proxy with your normal host firewall/access controls. A public proxy
-does not add authentication beyond the provider's own IMAP authentication.
+Use listener TLS or an encrypted tunnel across a network. Keep Njord accessible
+only to your own clients using a firewall, VPN or SSH forwarding. IMAP login is
+handled by the provider; the separate image endpoint does not require an IMAP
+login. Njord never logs credentials, message contents or image URLs.
 
-For a local test server or an intentionally opaque TCP tunnel:
+`--upstream-plaintext` selects ordinary TCP to a local test/provider server.
+`--raw` disables the Njord protocol for ordinary IMAP clients and opaque tunnels.
+STARTTLS is not negotiated inside Njord framing: use `/ssl` for TLS around it.
+`--upstream-ca FILE` chooses a provider CA bundle. DNS/connect/handshake and
+shutdown deadlines default to 30 seconds and are configurable. Established
+IMAP sessions have no idle timeout. See `njord --help` for all options.
 
-```sh
-njord --upstream 127.0.0.1 --upstream-port 2143 --upstream-plaintext
-```
+## Batches and attachment sizes
 
-This mode forwards raw bytes, including an end-to-end TLS conversation if the
-client and provider negotiate one. Njord itself does not negotiate STARTTLS.
-With the default upstream TLS mode, clients should use plaintext on the local
-loopback connection, or implicit TLS when listener certificates are configured.
+In Skadi's message index, **K (sYnc)** requests every header not yet cached,
+including subjects. An inventory request and the missing-header request are
+pipelined in one flight. The inventory includes UIDs, flags, message sizes and
+BODYSTRUCTURE; cached headers are not downloaded again. This also works over
+direct IMAP. Servers can still enforce their own command/resource limits;
+Skadi reports failures rather than silently splitting into sequential fetches.
 
-Other options include `--upstream-ca FILE` for a private CA,
-`--connect-timeout SECONDS` for connection establishment,
-`--shutdown-timeout SECONDS` for graceful drain and TLS shutdown (default 30), and `--verbose` for
-connection diagnostics. Certificate and hostname verification remain enabled.
-IPv6 addresses are accepted by `--listen` and `--upstream`; ports are separate
-arguments. Run `njord --help` for the complete interface.
+Select messages with `:` or `;`, then press **K** to fetch their complete bodies
+in one `UID FETCH ... BODY.PEEK[]` command. Downloaded messages do not become
+read merely from fetching. Each complete message is saved atomically before
+the next message is processed. Completed downloads survive an interrupted
+batch and are skipped on retry. RAM need only hold the current message, not
+the entire batch. Bodies include attachments; inspect sizes first if needed.
 
-## Forwarding and operation
+Press **[ (PartSizes)** in the index to see MIME parts, names and their encoded
+byte counts without downloading their contents. Sync saves this list for
+later offline inspection. IMAP reports transfer-encoded sizes: base64 and
+quoted-printable overhead are included. These are not exact decoded file
+sizes or predictions of the eventual compressed transfer size.
 
-Njord streams the chunks delivered by asyncio transports. It does not allocate
-a fixed command/response buffer or impose a maximum message, literal, session,
-or connection count. Transport backpressure pauses reading from a fast sender
-while a slow receiver catches up. Actual socket or memory failures disconnect
-the affected session and are logged. Idle sessions have no application timeout.
+Cache identity includes the mailbox, UIDVALIDITY and UID. Sequence positions
+can change after deletions; UIDs remain meaningful only within one mailbox's
+UIDVALIDITY. Message-ID is an email header, not an IMAP fetch identifier.
 
-Plain TCP half-closes are forwarded, allowing a final response after a client
-finishes sending. TLS does not support independent write-half shutdown; an EOF
-ends that session. SIGINT/SIGTERM stops the listener and disconnects active
-sessions. Run Njord under a service manager for persistent use; no service is
-automatically enabled by installation.
+Explicit body downloads and MIME inventories are individual `.eml` and `.mime`
+files in `~/.alpine-offcache`, outside the bounded opportunistic body cache.
+They persist across restarts. These private files contain mail; remove that
+cache directory if you intentionally want to discard all offline downloads.
+
+## Linked images
+
+HTTPS images are fetched only when you click their handle or Tab to it and
+press Enter. With `/njord`, the fetch happens at home through Njord. Without
+Njord, Skadi's direct image fetch uses the `curl` command. Formatting, repainting
+and cache lookups never initiate an image download.
+
+The default is a smaller preview: Njord decodes JPEG, PNG, GIF or WebP, fits
+within 1024 pixels on the longest side, and encodes WebP at quality 65. It sends
+the original instead when that is smaller. Previews are still images; a GIF
+preview uses its first frame. **O (Original)** in the image viewer requests
+the original bytes, without resizing or transcoding. Downloaded previews and
+originals are cached separately for repeated viewing during the session.
+
+`--image-width` and `--image-quality` adjust preview size and fidelity. The
+width must fit WebP's 14-bit dimension field (1..16383); quality is 0..100.
+`--image-timeout` sets each HTTPS transfer's deadline (default 60 seconds).
+`--image-ca` selects its CA bundle. TLS certificates are always verified,
+redirects must remain HTTPS, redirect cycles fail, and requests carry no mail
+credentials, cookies or ambient HTTP proxy configuration. Private destination
+addresses are rejected unless you explicitly use `--image-allow-private`.
+Each image runs in a separate native worker so fetching and encoding do not
+block the relay's event loop; disconnecting the client cleans up its worker.
+
+### Lepton
+
+Lepton preserves the original JPEG exactly, which makes it a candidate for
+future lossless original transfers rather than reduced previews. The
+[original Dropbox implementation](https://github.com/dropbox/lepton) is archived
+and deprecated. [Microsoft's Rust port](https://github.com/microsoft/lepton_jpeg_rust)
+is worth evaluating for an optional negotiated codec. It is not included in
+this release. WebP handles both JPEG and PNG previews without a Rust runtime
+or a client-side Lepton decoder.
+
+## Protocol and operation
+
+An IMAP connection exchanges the eight-byte `NJORD1\r\n` preamble. An image
+connection exchanges `NJIMG1\r\n`. Subsequent traffic in either direction is a
+four-byte big-endian compressed length followed by one checksummed zstd frame
+with its uncompressed length declared. Encoding uses level 22. Senders split
+streams at zstd's recommended streaming input size; these are independent
+frames, so compression history does not span frame boundaries. This bounds
+codec working memory without limiting message or batch size.
+
+An image request is `PREVIEW https://...\r\n` or `ORIGINAL https://...\r\n`.
+The response is `OK <source-bytes> <payload-bytes> <mime-type>\r\n` followed by
+exactly that many payload bytes, or `ERR <reason>\r\n`. One image per connection.
+Both the request and response use the same zstd framing, including originals.
+
+The nonblocking relay uses asynchronous DNS, growing buffers and backpressure
+based on OS socket buffers. It imposes no message, batch or connection-count
+cap. Actual allocation, API integer and OS resource limits produce errors.
+TCP half-closes drain normally; TLS EOF drains traffic and performs TLS close
+notification within the shutdown deadline. SIGINT/SIGTERM disconnect sessions.
+An interrupted IMAP connection must be reopened by the client; automatic
+session replay and measured satellite performance remain future work.
 
 ## Verify
 
@@ -86,8 +159,9 @@ automatically enabled by installation.
 make -C njord check
 ```
 
-The tests use disposable loopback servers and locally generated certificates.
-They require OpenSSL's command-line tool, but no live mail account or outbound
-mail. They exercise large/binary traffic, simultaneous directions, repeated and
-concurrent clients, half-close behavior, backpressure, TLS verification, and
-connection failures.
+The Python tests create disposable loopback IMAP/HTTPS servers and certificates,
+without a live account. They cover TCP/TLS, backpressure, large transfers,
+concurrency, repeated sessions, failures, framing, previews and originals.
+`NJORDBIN` tests an installed binary. `Makefile.integration` builds the actual
+Skadi transport/cache/image integration executable after a normal Skadi build;
+set `SKADITEST` to its path to include those end-to-end checks.

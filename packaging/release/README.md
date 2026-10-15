@@ -12,8 +12,9 @@ version banner. Njord is a separate package and does not enable a service.
 | graviton5 | Ubuntu 26.04, arm64 | APT `resolute` |
 | loongson | Kylin V10 SP1, old-world loongarch64 | APT `kylin` |
 
-The configured SSH alias is `loongson`. Njord uses Python 3.8 or later and its
-Debian packages have architecture `all`; its integration suite runs on each host.
+The configured SSH alias is `loongson`. Njord 0.1.0 is C++17, linked with libevent
+OpenSSL, zstd, libcurl and WebP. Its packages are native to each architecture. Python is needed only
+to run its integration suite, which runs on every build host.
 
 ## Build
 
@@ -26,11 +27,19 @@ Run `build-linux.sh` from the isolated snapshot, then
 `python3 packaging/release/package-deb.py --suite resolute --output ../packages`
 (or `--suite kylin`). The script builds c-client serially before parallel
 compilation, links libm, and runs the existing mail regressions. Run
-`make -C njord check` separately. `dpkg-shlibdeps` derives runtime dependencies.
+`make -C njord check` separately. Install the Njord build dependencies listed in
+`../../njord/README.md`. `dpkg-shlibdeps` derives runtime dependencies for both
+executables. For a Njord-only release, run `make -C njord check` and pass
+`--package njord` to `package-deb.py`; Skadi does not need rebuilding.
 
 The initial Skadi 0.1.0 source archive predates the explicit libm flag in the
 helper; use `LIBS=-lm sh packaging/release/build-linux.sh` with that archive.
-The separately versioned Njord 0.1.1 archive includes its Python 3.8 fixes.
+The C++ rewrite uses upstream version 0.1.0. Debian epoch `1:` and Homebrew
+`version_scheme 1` make it an upgrade from the earlier Python 0.1.1 package.
+They are package ordering metadata; `njord --version` reports 0.1.0. Its source
+archive is `skadi-0.1.0-20261015.2.tar.gz`, preserving the older archives.
+When replacing architecture-independent Python packages, remove Njord from the
+affected APT suites before importing all native architectures in one publication.
 
 Homebrew formulas are in `../homebrew`. Build bottles natively, test their
 installed commands, publish the bottle and source hashes, and verify a public

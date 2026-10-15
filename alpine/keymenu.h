@@ -223,6 +223,7 @@ struct key_menu {
 #define MC_ADDCALHEADER	810
 #define MC_DOWNLOAD	811
 #define MC_SYNC		812
+#define MC_ATTACHINFO    813
 
 /* Commands for S/MIME screens */
 #define MC_TRUST	900

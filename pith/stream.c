@@ -1530,6 +1530,9 @@ pine_mail_fetch_structure(MAILSTREAM *stream, long unsigned int msgno,
 {
     ENVELOPE *env = NULL;
 
+    if(body && stream && !offcache_is_stream(stream))
+      offcache_note_fetch(stream, flags & FT_UID ? mail_msgno(stream, msgno) : msgno);
+
     ps_global->dont_count_flagchanges = 1;
     if(stream && (flags & FT_UID || (msgno > 0L && msgno <= stream->nmsgs)))
       env = mail_fetch_structure(stream, msgno, body, flags);
@@ -1543,6 +1546,9 @@ ENVELOPE *
 pine_mail_fetchstructure(MAILSTREAM *stream, long unsigned int msgno, struct mail_bodystruct **body)
 {
     ENVELOPE *env = NULL;
+
+    if(body && stream && !offcache_is_stream(stream))
+      offcache_note_fetch(stream, msgno);
 
     ps_global->dont_count_flagchanges = 1;
     if(stream && msgno > 0L && msgno <= stream->nmsgs)
@@ -1562,7 +1568,7 @@ char *
 pine_mail_fetch_body(MAILSTREAM *stream, long unsigned int msgno, char *section,
 		     long unsigned int *len, long int flags)
 {
-    offcache_note_fetch(stream, msgno);
+    offcache_note_fetch(stream, stream && (flags & FT_UID) ? mail_msgno(stream, msgno) : msgno);
 
 #ifdef _WINDOWS
     if(F_ON(F_QUELL_SSL_LARGEBLOCKS, ps_global))
@@ -1582,7 +1588,7 @@ char *
 pine_mail_fetch_text(MAILSTREAM *stream, long unsigned int msgno, char *section,
 		     long unsigned int *len, long int flags)
 {
-    offcache_note_fetch(stream, msgno);
+    offcache_note_fetch(stream, stream && (flags & FT_UID) ? mail_msgno(stream, msgno) : msgno);
 
 #ifdef _WINDOWS
     if(F_ON(F_QUELL_SSL_LARGEBLOCKS, ps_global))

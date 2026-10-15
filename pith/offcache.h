@@ -17,7 +17,8 @@
  * Offline cache for remote IMAP folders.
  *
  * What we have already fetched lives in RAM for the session.  Disk is
- * read once at startup and written when a folder is closed, at exit,
+ * read once at startup and written after a message is downloaded,
+ * when a folder is closed, at exit,
  * and from the signal cleanup path -- and only for folders that
  * changed.  There are no periodic writes.
  *
@@ -54,6 +55,11 @@ void	 offcache_learn_stream(MAILSTREAM *);
 void	 offcache_learn_stream_quick(MAILSTREAM *);
 void	 offcache_apply_pending(MAILSTREAM *);
 void	 offcache_note_fetch(MAILSTREAM *, unsigned long);
+int	 offcache_prepare_message(MAILSTREAM *, unsigned long);
+int	 offcache_body_cached(MAILSTREAM *, unsigned long);
+int      offcache_sync_headers(MAILSTREAM *);
+int      offcache_prepare_batch(MAILSTREAM *, const unsigned long *, size_t);
+char    *offcache_attachment_info(MAILSTREAM *, unsigned long);
 
 
 #endif /* PITH_OFFCACHE_INCLUDED */

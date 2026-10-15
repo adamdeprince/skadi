@@ -2188,6 +2188,27 @@ if test "x$alpine_NTLM" != "xnone" ; then
   AC_MSG_NOTICE([* * * Including NTLM Authenticator])
 fi
 
+AC_ARG_VAR([WEBP_CFLAGS], [C compiler flags for WebP])
+AC_ARG_VAR([WEBP_LIBS], [linker flags for WebP])
+AC_ARG_VAR([ZSTD_CFLAGS], [C compiler flags for zstd])
+AC_ARG_VAR([ZSTD_LIBS], [linker flags for zstd])
+if test -z "$ZSTD_CFLAGS$ZSTD_LIBS" && command -v pkg-config >/dev/null 2>&1 && pkg-config --exists libzstd ; then
+  ZSTD_CFLAGS=`pkg-config --cflags libzstd`
+  ZSTD_LIBS=`pkg-config --libs libzstd`
+fi
+if test -z "$WEBP_CFLAGS$WEBP_LIBS" && command -v pkg-config >/dev/null 2>&1 && pkg-config --exists libwebp ; then
+  WEBP_CFLAGS=`pkg-config --cflags libwebp`
+  WEBP_LIBS=`pkg-config --libs libwebp`
+fi
+CPPFLAGS="$CPPFLAGS $WEBP_CFLAGS"
+LIBS="$LIBS ${WEBP_LIBS:--lwebp}"
+CPPFLAGS="$CPPFLAGS $ZSTD_CFLAGS"
+LIBS="$LIBS ${ZSTD_LIBS:--lzstd}"
+AC_CHECK_HEADER([webp/decode.h], [], [AC_MSG_ERROR([WebP development headers are required for image previews])])
+AC_CHECK_HEADER([zstd.h], [], [AC_MSG_ERROR([zstd development headers are required for Njord support])])
+AC_LINK_IFELSE([AC_LANG_PROGRAM([[#include <zstd.h>]], [[ZSTD_CCtx *c = ZSTD_createCCtx(); ZSTD_compress2(c, 0, 0, 0, 0); ZSTD_freeCCtx(c);]])],
+              [], [AC_MSG_ERROR([zstd 1.4 or newer is required for Njord support])])
+
 if test -n "$CPPFLAGS" ; then
   alpine_c_client_cflags="$alpine_c_client_cflags ${CPPFLAGS}"
 fi

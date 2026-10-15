@@ -63,6 +63,7 @@
 #include "../pith/list.h"
 #include "../pith/detach.h"
 #include "../pith/kittyimg.h"
+#include "../pith/remoteimg.h"
 
 
 /*----------------------------------------------------------------------
@@ -1075,12 +1076,100 @@ scroll_handle_prompt(HANDLE_S *handle, int force)
 
 
 
+static struct key linked_image_keys[] = {
+    HELP_MENU, NULL_MENU,
+    {"E",N_("Exit Viewer"),{MC_EXIT,1,{'e'}},KS_EXITMODE},
+    {"O",N_("Original"),{MC_DOWNLOAD,1,{'o'}},KS_NONE},
+    NULL_MENU, NULL_MENU, PREVPAGE_MENU, NEXTPAGE_MENU,
+    NULL_MENU, WHEREIS_MENU, HOMEKEY_MENU, ENDKEY_MENU
+};
+static struct key_menu linked_image_keymenu = {
+    sizeof(linked_image_keys) / (12 * sizeof(struct key)), 0, 0, linked_image_keys
+};
+
+static int
+linked_image_command(int command, MSGNO_S *messages, SCROLL_S *args)
+{
+    if(command == MC_DOWNLOAD){ args->proc.data.i = 1; return 1; }
+    return 0;
+}
+
+/* Return 2 when the caller should reformat the message around the image. */
+static int
+scroll_linked_image(HANDLE_S *handle)
+{
+    char *url = handle->type == URL ? handle->h.url.path : handle->h.img.src;
+    const char *error = NULL;
+    int kid, rows = 0, cols = 0, busy, fetch = REMOTE_IMAGE_PREVIEW;
+    SCRLCTRL_S *st = scroll_state(SS_CUR);
+    STORE_S *store;
+    HANDLE_S *handles = NULL;
+    SCROLL_S args;
+    gf_o_t pc;
+
+again:
+    busy = busy_cue(fetch == REMOTE_IMAGE_ORIGINAL ? _("Downloading original image") : _("Loading image preview"), NULL, 1);
+    kid = kitty_img_from_url(url, fetch, &rows, &cols, &error);
+    if(busy)
+      cancel_busy_cue(-1);
+    if(kid <= 0){
+	q_status_message(SM_ORDER, 0, 4,
+			 error ? (char *) error : _("Could not display image"));
+	return(0);
+    }
+
+    /* A direct image URL has no reserved rows in the source message. */
+    store = so_get(CharStar, NULL, EDIT_ACCESS);
+    if(!store)
+      return(0);
+    gf_set_so_writec(&pc, store);
+    kitty_img_emit_block(pc, &handles, kid, rows, cols, NULL,
+			 handle->type == IMG ? handle->h.img.alt : _("Linked image"));
+    gf_clear_so_writec(store);
+    memset(&args, 0, sizeof(args));
+    args.text.text = so_text(store);
+    args.text.src = CharStar;
+    args.text.desc = _("image");
+    args.text.handles = handles;
+    args.bar.title = fetch == REMOTE_IMAGE_ORIGINAL ? _("ORIGINAL IMAGE") : _("IMAGE PREVIEW — O downloads original");
+    args.keys.menu = &linked_image_keymenu;
+    setbitmap(args.keys.bitmap);
+    args.proc.tool = linked_image_command;
+    args.help.text = h_simple_text_view;
+    args.help.title = _("HELP FOR IMAGE VIEW");
+    args.quell_newmail = 1;
+    scrolltool(&args);
+    free_handles(&handles);
+    so_give(&store);
+    if(args.proc.data.i && fetch != REMOTE_IMAGE_ORIGINAL){
+        fetch = REMOTE_IMAGE_ORIGINAL;
+        goto again;
+    }
+    ps_global->mangled_screen = 1;
+    return(st && st->parms->resize_exit ? 2 : 0);
+}
+
+
+static void
+scroll_image_offset(SCROLL_S *args)
+{
+    long line, top = scroll_state(SS_CUR)->top_text_line;
+
+    args->start.on = Offset;
+    args->start.loc.offset = 0L;
+    for(line = 0; line < top; line++)
+      args->start.loc.offset += scroll_handle_column(line, -1);
+}
+
+
 int
 scroll_handle_launch(HANDLE_S *handle, int force)
 {
    int flags;
     switch(handle->type){
       case URL :
+	if(remote_image_link(handle->h.url.path))
+	  return(scroll_linked_image(handle));
 	if(handle->h.url.path){
 	    if(scroll_handle_prompt(handle, force)){
 		if(url_launch(handle)
@@ -1117,6 +1206,9 @@ scroll_handle_launch(HANDLE_S *handle, int force)
       case IMG:
 	{
 	    ATTACH_S *ia = handle->h.img.attach;
+
+	    if(handle->h.img.remote)
+	      return(scroll_linked_image(handle));
 
 	    if(!ia && handle->h.img.src)
 	      ia = kitty_img_attach_for_cid(handle->h.img.src);
@@ -3331,6 +3423,12 @@ scrolltool(SCROLL_S *sparms)
 	      case 0 :
 		switch(scroll_handle_launch(sparms->text.handles,
 					sparms->text.handles->force_display)){
+		  case 2 :
+		    scroll_image_offset(sparms);
+		    cmd = MC_RESIZE;
+		    done = 1;
+		    break;
+
 		  case 1 :
 		    cmd = MC_EXIT;		/* propagate */
 		    done = 1;
@@ -5449,6 +5547,12 @@ doubleclick_handle(SCROLL_S *sparms, HANDLE_S *next_handle, int *cmd, int *done)
   }
   else
     switch(scroll_handle_launch(next_handle, TRUE)){
+    case 2 :
+      scroll_image_offset(sparms);
+      *cmd = MC_RESIZE;
+      *done = 1;
+      break;
+
     case 1 :
       *cmd = MC_EXIT;		/* propagate */
       *done = 1;

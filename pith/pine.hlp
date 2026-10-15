@@ -658,6 +658,19 @@ Additions include:
      <a href="h_config_offline_cache"><!--#echo var="FEAT_enable-offline-cache"--></a>
      (enabled by default).
 
+<LI> Skadi can connect directly to IMAP or through optional Njord using
+     <TT>{home.example.com:1993/njord/ssl}INBOX</TT>. Njord compresses traffic
+     in both directions with zstd level 22 and uses ordinary IMAP upstream.
+     In the index, <TT>K (sYnc)</TT> fetches uncached headers and attachment
+     metadata together. Select messages first to download their bodies as
+     one batch. <TT>[ (PartSizes)</TT> shows encoded attachment byte counts
+     without downloading the parts; Sync keeps this list for offline use.
+
+<LI> Click an HTTPS image handle, or Tab to it and press Enter, to view it.
+     Njord fetches a smaller WebP preview. Press <TT>O (Original)</TT> in
+     the image viewer to fetch the original bytes. Images are never fetched
+     just by formatting or repainting a message.
+
 <LI> When the terminal is kitty (directly or over ssh), attachments can
      move through the terminal with kitty's file transfer protocol.
      Download (<TT>L</TT>) in the ATTACHMENT INDEX sends one part, or
@@ -2824,7 +2837,7 @@ it, or Ctrl+Shift+click when mouse support is turned on in Alpine).
 
 <P>
 For providers whose registered redirect address is
-<TT>http://localhost</TT> (for example Gmail and Outlook), Alpine
+<TT>http://127.0.0.1</TT> or <TT>http://localhost</TT>, Alpine
 listens on a port on this computer's loopback interface and sends that
 address to the provider. When you finish signing in, the browser is
 sent back to that address and Alpine picks up the authorization code
@@ -2833,14 +2846,25 @@ redirect must carry the same <EM>state</EM> value Alpine sent, so a
 stray request to that port cannot be mistaken for the real thing.
 
 <P>
-If you are running Alpine over ssh, the browser on your own computer
-cannot reach that port unless you forward it. The screen shows the
-port number; forward it with
-<TT>ssh -R <EM>port</EM>:localhost:<EM>port</EM> <EM>host</EM></TT>
-before you open the link. Without the forward, finish signing in
-anyway, copy the address of the page the browser ends up on (it
-contains <TT>code=</TT>), press 'C', and paste it. Alpine takes the
-code out of that address.
+If you are running Alpine over ssh or on a browserless terminal, run
+the following on the computer WITH the browser, using the current
+port shown on the authorization screen:
+<TT>ssh -N -o ExitOnForwardFailure=yes -L 127.0.0.1:<EM>port</EM>:127.0.0.1:<EM>port</EM> <EM>user@alpine-host</EM></TT>.
+The SSH destination is the machine RUNNING Alpine. Leave Alpine's
+screen and the tunnel open, then open the authorization link in that
+computer's browser. Close the tunnel after sign-in. Each new attempt
+uses a new port. Set <TT>ALPINE_OAUTH_NO_BROWSER=1</TT> when launching
+Alpine to suppress local browser launch explicitly.
+<P>
+Without forwarding, finish signing in anyway, copy the entire final
+loopback URL from the browser's address bar even if the page fails to
+load, press 'C', and paste it. Alpine checks the address and
+<TT>state=</TT> before decoding <TT>code=</TT>. A bare code is not
+accepted for loopback sign-in. Keep these URLs private.
+<P>
+For Gmail, register a Desktop app client. Google's TV/device-code flow
+does not support Gmail access. Save refresh tokens on the host where
+Alpine runs so later access-token renewal does not need a browser.
 
 <P>
 Providers that hand you a code on a web page instead of redirecting
@@ -2854,9 +2878,10 @@ After Alpine has the code, it exchanges it for the tokens it needs and
 concludes logging you into your account.
 
 <P>
-If your version of Alpine was compiled to save passwords, then Alpine will save
-the refresh and access tokens securely, otherwise you will have to repeat this
-process every time you login to this server.
+If your version of Alpine supports persistent credentials, set up its
+credential store and answer Yes when asked to save the tokens. macOS
+uses Keychain; on Linux, prefer a build with encrypted password-file
+support. Without persistent storage, sign-in must be repeated.
 
 <P>
 &lt;End of setting up XOAUTH2 Authentication help&gt;
@@ -32520,14 +32545,16 @@ to the displayed text.
 
 When this feature is enabled, image attachments and HTML inline images
 (cid: and data: URIs) are drawn in the message text. Alpine decodes
-PNG, JPEG, GIF, BMP and PNM images itself; no external programs are
-run. Other formats, and images that are too large, get the usual
-text line instead.
+PNG, JPEG, GIF, BMP and PNM images itself. Other formats, and images
+that are too large, get the usual text line instead.
 <P>
 Each image is preceded by a selectable line of the form
-<TT>[Image: name]</TT>. Move to it with the arrow keys or Tab and
-press Enter to open the full-size image with the usual attachment
-viewer.
+<TT>[Image: name]</TT>. Move to it with the arrow keys or Ctrl-F (NextLink) and
+press Enter. Embedded attachments use the usual attachment viewer.
+For a linked HTTP(S) image, Enter downloads it and displays it locally
+in the message, without opening a browser. A direct image URL opens
+a local image view. Downloads require <TT>curl</TT> in PATH and are
+limited to 3 MB, five redirects and fifteen seconds.
 <P>
 Thumbnails fit a box of terminal cells set by
 <A HREF="h_config_inline_image_size"><!--#echo var="VAR_inline-image-max-size"--></A>
@@ -32543,7 +32570,11 @@ decode again.
 The drawing method is chosen from the terminal: the kitty graphics
 protocol (kitty, WezTerm, Ghostty and others), iTerm2's inline image
 sequence, or sixels. Kitty images are sent as data, so they work over
-ssh. Remote http(s) images are never fetched.
+ssh. Remote HTTP(S) images are only fetched when selected, not when
+opening mail; selecting one can reveal your IP address to its server.
+Original downloads are cached in RAM for the session (up to 12 MB or
+32 images); they are not saved to disk. Unsupported formats or
+terminals show an error and never fall back to a browser.
 <P>
 This feature is on by default. Turn it off if you do not want images
 drawn in the viewer.
@@ -32608,18 +32639,20 @@ already opened so you can read them later without a network connection.
 News and POP folders are not cached.
 <P>
 The cache is kept in memory while Alpine is running. It is written to
-<TT>~/.alpine-offcache</TT> (with mode 0600) when a folder is closed,
+<TT>~/.alpine-offcache</TT> (with mode 0600) as soon as a requested message
+has been downloaded, when a folder is closed,
 when Alpine exits, and when Alpine is terminated by a hangup or a
 terminate signal; only folders that changed are written, and nothing is
 written on a timer. That avoids constant disk writes on devices with
 limited flash storage.
 <P>
-When you open a remote folder, Alpine first tries the server with a short
-timeout and falls back to the cached copy if the server cannot be reached.
-The title bar shows <TT>[offline]</TT> while you are reading a cached
-folder. If you would rather open the cache immediately and only contact
-the server on request, turn on
-<A HREF="h_config_offline_cache_first"><!--#echo var="FEAT_offline-cache-open-first"--></A>.
+By default Alpine opens cached folders immediately at startup. The title
+bar shows <TT>[cached]</TT> while you are reading a cached folder. Opening
+a message whose contents are missing downloads it on demand; no manual
+Sync is required. Use <TT>Sync</TT> to refresh the folder's message list.
+Turn off
+<A HREF="h_config_offline_cache_first"><!--#echo var="FEAT_offline-cache-open-first"--></A>
+to try the server first and fall back to the cache if it cannot be reached.
 <P>
 Flag changes, keyword changes, and deletions (including expunges) made
 while reading the cache are remembered and applied the next time the live
@@ -32629,19 +32662,30 @@ another client are not undone. The <TT>Sync</TT> command in the MESSAGE
 INDEX reopens the live folder and applies pending changes; on a live folder
 it refreshes the cache and sends anything waiting in the local outbox.
 <P>
-Message bodies are cached for messages you have viewed; a message that has
-never been viewed shows its headers and a note that the body is not cached.
-Bodies larger than 4&nbsp;MB are never cached. The amount of body text
+Opening an uncached message fetches its complete MIME header and body,
+including attachments, through a read-only connection. The download is
+saved immediately, so it survives a restart without a clean exit. Reading
+an already cached message does not contact the server. Index previews and
+attachment counts do not trigger downloads of uncached messages.
+If the connection fails, reopen the message to retry; failed downloads
+are never saved as message content. This demand fetch does not send the
+outbox or apply pending offline changes.
+<P>
+There is no separate 4&nbsp;MB per-message cutoff. The amount of body text
 kept is limited by
 <A HREF="h_config_offcache_folder_mb"><!--#echo var="VAR_offline-cache-folder-max-mb"--></A>
 and
 <A HREF="h_config_offcache_total_mb"><!--#echo var="VAR_offline-cache-total-max-mb"--></A>,
-and cached folders you have not opened for
+with defaults of 32&nbsp;MB per folder and 256&nbsp;MB overall. Older bodies
+are evicted to make room for the message you requested. A message larger
+than either configured limit can still be read, but Alpine warns that it
+cannot be saved for offline use; raise the limits to retain it. Cached
+folders you have not opened for
 <A HREF="h_config_offcache_max_age"><!--#echo var="VAR_offline-cache-max-age-days"--></A>
 days are discarded.
 <P>
 Messages that could not be sent are queued in <TT>~/.alpine-outbox</TT>
-and sent automatically the next time a live connection is made, through the
+and sent automatically when the live-folder/outbox workflow connects, through the
 normal sending configuration (SMTP or sendmail, roles, and Fcc). A message
 that fails to send several times is left in the outbox and reported, so
 you can open that folder and resend or delete it.
@@ -32663,13 +32707,19 @@ When this feature is enabled (and the
 <A HREF="h_config_offline_cache"><!--#echo var="FEAT_enable-offline-cache"--></A>
 feature is on), a remote folder that has a cached copy is opened from the
 cache without contacting the server, and Alpine does not connect at startup
-at all. Use the <TT>Sync</TT> command to open the live folder and apply
-pending changes. Compose does not probe remote postponed or form-letter
-folders until a live connection has been made.
+at all. Missing message contents are fetched and saved when you open the
+message; cached contents are reused without connecting. Use the
+<TT>Sync</TT> command to refresh the folder and apply pending changes.
+Starting a new message does not probe remote postponed or
+form-letter folders, even after connecting. To resume a remote draft or
+use a form letter, enable <TT>alternate-compose-menu</TT> and select
+<TT>Postponed</TT> or <TT>FormLetter</TT>; that explicit choice connects
+to the folder when needed.
 <P>
-This is useful on slow or metered links. The feature is off by default: normally Alpine
-tries the server first, with a short timeout, and only falls back to the
-cache when the server cannot be reached.
+This feature is on by default. Turn it off to try the server first, with
+a short timeout, and only fall back to the cache when the server cannot
+be reached. If no cached inbox exists yet, open the inbox once to connect
+and populate the cache.
 <P>
 &lt;End of help on this topic&gt;
 </BODY>
@@ -32699,8 +32749,9 @@ The default is 32.
 <H1>OPTION: <!--#echo var="VAR_offline-cache-total-max-mb"--></H1>
 
 The largest amount of message body text, in megabytes, that the offline
-cache keeps for all folders together. When the limit is exceeded at
-startup, the bodies of the folders you opened least recently are dropped.
+cache keeps for all folders together. When a demanded message needs space,
+older bodies from the folders you opened least recently are dropped first.
+The limit is also enforced at startup.
 The default is 256.
 <P>
 &lt;End of help on this topic&gt;
@@ -39908,4 +39959,3 @@ and Cc: fields of the message. Enter ^C to cancel message.
 x-alpine-http:https://alpineapp.email/legal/privacy.html
 ========== h_apache_license ==========
 x-alpine-http:https://alpineapp.email/legal/apache_license.html
-

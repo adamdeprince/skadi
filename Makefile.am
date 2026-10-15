@@ -12,7 +12,7 @@
 #
 # ========================================================================
 
-EXTRA_DIST = config.rpath VERSION README LICENSE njord/njord njord/Makefile njord/README.md njord/test_njord.py doc/man1/njord.1
+EXTRA_DIST = config.rpath VERSION README LICENSE njord/njord.cpp njord/image.cpp njord/image.h njord/Makefile njord/README.md njord/test_njord.py njord/test_skadi.c njord/Makefile.integration imap/src/c-client/njord_codec.h imap/src/c-client/njord_transport.c doc/man1/njord.1
 
 SUBDIRS = m4 po $(REGEX_BUILD) pith pico alpine $(WEB_PUBCOOKIE_BUILD) $(WEB_BUILD)
 
@@ -32,8 +32,12 @@ c-client:
 gssapi_proxy.l:
 	if test ! -L c-client/auth_gss_proxy.c ; then $(LN_S) @abs_top_srcdir@/web/src/pubcookie/auth_gss_proxy.c c-client/auth_gss_proxy.c ; fi
 
+all-local:
+	$(MAKE) -C $(srcdir)/njord
+
 clean-local:
 	cd imap && $(MAKE) clean
+	$(MAKE) -C $(srcdir)/njord clean
 
 man_MANS = doc/man1/alpine.1 doc/man1/pico.1 doc/man1/pilot.1 doc/man1/rpdump.1 doc/man1/rpload.1
 

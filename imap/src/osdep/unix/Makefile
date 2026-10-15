@@ -897,7 +897,7 @@ dummy.o: mail.h misc.h osdep.h dummy.h
 fdstring.o: mail.h misc.h osdep.h fdstring.h
 flstring.o: mail.h misc.h osdep.h flstring.h
 imap4r1.o: mail.h misc.h osdep.h imap4r1.h rfc822.h
-mail.o: mail.h misc.h osdep.h rfc822.h linkage.h http.h json.h oauth2_aux.h oauth2_aux.c
+mail.o: mail.h misc.h osdep.h rfc822.h linkage.h http.h json.h oauth2_aux.h oauth2_aux.c njord_transport.c njord_codec.h
 mbx.o: mail.h misc.h osdep.h dummy.h
 mh.o: mail.h misc.h osdep.h dummy.h
 mix.o: mail.h misc.h osdep.h dummy.h

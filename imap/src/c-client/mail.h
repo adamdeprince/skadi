@@ -725,6 +725,7 @@ typedef struct net_mailbox {
   unsigned int dbgflag : 1;	/* debug flag */
   unsigned int secflag : 1;	/* secure flag */
   unsigned int sslflag : 1;	/* SSL driver flag */
+  unsigned int njordflag : 1;	/* optional Njord zstd transport */
   unsigned int tls1    : 1;	/* Use TLSv1 */
   unsigned int tls1_1  : 1;	/* Use TLSv1.1 */
   unsigned int tls1_2  : 1;	/* Use TLSV1.2 */
@@ -1915,6 +1916,9 @@ char *mail_auth (char *mechanism,authresponse_t resp,int argc,char *argv[]);
 AUTHENTICATOR *mail_lookup_auth (unsigned long i);
 unsigned int mail_lookup_auth_name (char *mechanism,long flags);
 void free_id(IDLIST **);
+#ifndef _WINDOWS
+NETSTREAM *net_njord_image(NETMBX *mb);
+#endif
 NETSTREAM *net_open (NETMBX *mb,NETDRIVER *dv,unsigned long port,
 		     NETDRIVER *ssld,char *ssls,unsigned long sslp);
 NETSTREAM *net_open_work (NETDRIVER *dv,char *host,char *service,

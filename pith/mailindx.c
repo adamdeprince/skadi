@@ -36,6 +36,7 @@
 #include "../pith/string.h"
 #include "../pith/send.h"
 #include "../pith/options.h"
+#include "../pith/offcache.h"
 #include "../pith/ablookup.h"
 #ifdef _WINDOWS
 #include "../pico/osdep/mswin.h"
@@ -3739,6 +3740,13 @@ fetch_firsttext(INDEXDATA_S *idata, int delete_quotes)
     MESSAGECACHE *mc;
     PINELT_S     *pelt = NULL;
 
+    /* Body previews in the index must not turn cache-first startup into
+     * downloads of every visible message. Opening a message hydrates it.
+     */
+    if(offcache_is_stream(idata->stream)
+       && !offcache_body_cached(idata->stream, idata->rawno))
+      return(NULL);
+
     /* we cache the result we get from this function, so that we do not have to
      * refetch the text in case there is a change. We could cache in the envelope
      * but c-client does not have a special field for that, nor we want to use the
@@ -4016,6 +4024,10 @@ BODY *
 fetch_body(INDEXDATA_S *idata)
 {
     BODY *body;
+
+    if(offcache_is_stream(idata->stream)
+       && !offcache_body_cached(idata->stream, idata->rawno))
+      return(NULL);
     
     if(idata->bogus || idata->no_fetch){
 	idata->bogus = 2;

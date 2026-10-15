@@ -51,6 +51,7 @@
 #include "../pith/init.h"
 #include "../pith/help.h"
 #include "../pith/kittyimg.h"
+#include "../pith/remoteimg.h"
 #include "../pico/keydefs.h"
 
 #ifdef _WINDOWS
@@ -4479,6 +4480,38 @@ html_img(HANDLER_S *hd, int ch, int cmd)
 		    src = p->value;
 	      }
 
+	    if(src && DO_HANDLES(hd->html_data)
+	       && struncmp(src, "cid:", 4) && struncmp(src, "data:", 5)){
+		HANDLE_S resolved, *h;
+		char *url;
+		int kid = 0, rows = 0, cols = 0;
+
+		memset(&resolved, 0, sizeof(resolved));
+		if(HTML_BASE(hd->html_data))
+		  html_a_relative(HTML_BASE(hd->html_data), src, &resolved);
+		else if(!strncmp(src, "//", 2))
+		  html_a_relative("https://localhost/", src, &resolved);
+		else
+		  resolved.h.url.path = cpystr(src);
+		url = resolved.h.url.path;
+		if(remote_image_url(url)){
+		    h = new_handle(HANDLESP(hd->html_data));
+		    h->type = IMG;
+		    h->h.img.remote = 1;
+		    h->h.img.src = url;
+		    h->h.img.alt = cpystr(alt ? alt : "Linked image (select to load)");
+		    if(!STRIP(hd->html_data))
+		      kid = kitty_img_from_url(url, 0, &rows, &cols, NULL);
+		    h->h.img.kitty_id = kid;
+		    h->h.img.rows = rows;
+		    h->h.img.cols = cols;
+		    html_image_block(hd->html_data, h->key, h->h.img.alt, rows);
+		    return(0);
+		}
+		if(url)
+		  fs_give((void **) &url);
+	    }
+
 	    /*
 	     * Multipart/Related Content ID pointer
 	     * ONLY attached messages are recognized
@@ -8176,6 +8209,12 @@ html_image_block(FILTER_S *f, int key, char *alt, int rows)
 {
     char buf[32], text[128];
     int  i, n;
+    int *anchor_prefix = HD(f)->prefix;
+
+    /* A pending enclosing <a> must not overwrite the image's own handle
+     * when its first printable character is emitted. Keep that link for
+     * following text (or the separate [LINK] emitted at </a>). */
+    HD(f)->prefix = NULL;
 
     if(f->f2 || f->n || CENTER_BIT(f) || HD(f)->centered || WRAPPED_LEN(f))
       html_output(f, HTML_NEWLINE);
@@ -8200,6 +8239,8 @@ html_image_block(FILTER_S *f, int key, char *alt, int rows)
 	for(i = 0; i < rows; i++)
 	  html_output(f, HTML_NEWLINE);
     }
+
+    HD(f)->prefix = anchor_prefix;
 }
 
 

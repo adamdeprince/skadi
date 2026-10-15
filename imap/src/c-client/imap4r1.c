@@ -85,6 +85,9 @@ typedef struct imap_local {
   unsigned int tlssslv23 : 1;	/* TLS using SSLv23 client method */
   unsigned int notlsflag : 1;	/* TLS not used in session */
   unsigned int sslflag : 1;	/* SSL session */
+  unsigned int njordflag : 1;	/* Njord compression session */
+  imap_batch_callback_t batch_callback;
+  void *batch_context;
   unsigned int tls1 : 1;	/* using TLSv1 over SSL */
   unsigned int tls1_1 : 1;	/* using TLSv1_1 over SSL */
   unsigned int tls1_2 : 1;	/* using TLSv1_2 over SSL */
@@ -1005,6 +1008,7 @@ MAILSTREAM *imap_open (MAILSTREAM *stream)
     if (mb.tlssslv23) LOCAL->tlssslv23 = T;
     if (mb.notlsflag) LOCAL->notlsflag = T;
     if (mb.sslflag) LOCAL->sslflag = T;
+    if (mb.njordflag) LOCAL->njordflag = T;
     if (mb.novalidate) LOCAL->novalidate = T;
     if (mb.loser) LOCAL->loser = T;
   }
@@ -1027,6 +1031,7 @@ MAILSTREAM *imap_open (MAILSTREAM *stream)
     if (LOCAL->tlssslv23) strcat (tmp,"/tls-sslv23");
     if (LOCAL->notlsflag) strcat (tmp,"/nostarttls");
     if (LOCAL->sslflag) strcat (tmp,"/ssl");
+    if (LOCAL->njordflag) strcat (tmp,"/njord");
     if (LOCAL->novalidate) strcat (tmp,"/novalidate-cert");
     if (LOCAL->loser) strcat (tmp,"/loser");
     if (stream->secure) strcat (tmp,"/secure");
@@ -1750,6 +1755,53 @@ ENVELOPE *imap_structure (MAILSTREAM *stream,unsigned long msgno,BODY **body,
  *	    flags
  * Returns: T on success, NIL on failure
  */
+
+long imap_fetch_batch(MAILSTREAM *stream, const char *uids, int bodies,
+                      imap_batch_callback_t callback, void *context)
+{
+  char tag[9], inventory_tag[9]; /* c-client uses eight hexadecimal tag digits. */
+  char *command;
+  const char *inventory = " UID FETCH 1:* (UID FLAGS RFC822.SIZE BODYSTRUCTURE)\r\n";
+  const char *attributes = bodies == IMAP_BATCH_BODIES ? "(UID BODY.PEEK[])" :
+    bodies == IMAP_BATCH_METADATA ? "(UID FLAGS RFC822.SIZE BODYSTRUCTURE)" :
+    "(UID FLAGS INTERNALDATE RFC822.SIZE BODYSTRUCTURE BODY.PEEK[HEADER])";
+  size_t length, suffix;
+  IMAPPARSEDREPLY *reply;
+  long result;
+  mailgets_t old_gets;
+  if(!stream || !stream->dtb || strcmp(stream->dtb->name,"imap") ||
+     !LOCAL || !LOCAL->netstream || stream->lock || !uids || !*uids ||
+     strspn(uids,"0123456789:,*") != strlen(uids)) return NIL;
+  length = strlen(uids);
+  suffix = strlen(attributes) + sizeof(tag) + sizeof(" UID FETCH  \r\n");
+  if(!bodies) suffix += sizeof(inventory_tag) + strlen(inventory);
+  if(length > (size_t)-1 - suffix){ mm_log("Batch command size overflow",ERROR); return NIL; }
+  command = (char *)malloc(length + suffix);
+  if(!command){ mm_log("Could not allocate batch command",ERROR); return NIL; }
+  if(!bodies) sprintf(inventory_tag,"%08lx",0xffffffff & stream->gensym++);
+  sprintf(tag,"%08lx",0xffffffff & stream->gensym++);
+  if(!bodies) sprintf(command,"%s%s%s UID FETCH %s %s\r\n",inventory_tag,inventory,tag,uids,attributes);
+  else sprintf(command,"%s UID FETCH %s %s\r\n",tag,uids,attributes);
+  stream->unhealthy = NIL;
+  mail_lock(stream);
+  old_gets = (mailgets_t)mail_parameters(NIL,GET_GETS,NIL);
+  mail_parameters(NIL,SET_GETS,NIL);
+  /* Inventory and missing headers are pipelined in one flight. Inventory maps
+   * sequence numbers after expunges without refetching any cached headers. */
+  result = net_sout(LOCAL->netstream,command,strlen(command));
+  if(result && !bodies) result = imap_OK(stream,imap_reply(stream,inventory_tag));
+  LOCAL->batch_callback = result ? callback : NIL;
+  LOCAL->batch_context = context;
+  reply = LOCAL->netstream ? imap_reply(stream,tag) : NIL;
+  LOCAL->batch_callback = NIL;
+  LOCAL->batch_context = NIL;
+  result = result && reply && imap_OK(stream,reply) && !stream->unhealthy;
+  if(reply && !imap_OK(stream,reply)) mm_log(reply->text,ERROR);
+  mail_unlock(stream);
+  mail_parameters(NIL,SET_GETS,(void *)old_gets);
+  free(command);
+  return result;
+}
 
 long imap_msgdata (MAILSTREAM *stream,unsigned long msgno,char *section,
 		   unsigned long first,unsigned long last,STRINGLIST *lines,
@@ -4329,6 +4381,8 @@ void imap_parse_unsolicited (MAILSTREAM *stream,IMAPPARSEDREPLY *reply)
       }
 				/* do callback if requested */
       if (ie && env) (*ie) (stream,msgno,env);
+      if (LOCAL->batch_callback && !stream->unhealthy)
+        (*LOCAL->batch_callback)(stream,msgno,LOCAL->batch_context);
     }
 				/* obsolete response to COPY */
     else if (strcmp (s,"COPY") || !LOCAL->authed) {

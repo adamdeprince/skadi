@@ -40,6 +40,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <limits.h>
+#include <stdint.h>
+#include <webp/decode.h>
 
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_NO_STDIO
@@ -49,7 +52,7 @@
 #define STBI_NO_PSD
 #define STBI_NO_TGA
 #define STBI_NO_FAILURE_STRINGS
-#define STBI_MAX_DIMENSIONS	(1 << 15)
+#define STBI_MAX_DIMENSIONS INT_MAX /* decoder uses signed int offsets */
 #define STBI_ASSERT(x)		((void) 0)
 #include "stb_image.h"
 
@@ -66,6 +69,7 @@
 
 #include "../pith/headers.h"
 #include "../pith/kittyimg.h"
+#include "../pith/remoteimg.h"
 #include "../pith/state.h"
 #include "../pith/conf.h"
 #include "../pith/filter.h"
@@ -99,6 +103,7 @@ void	  kitty_img_note_resize(void) { }
 int	  kitty_img_from_part(ATTACH_S *a, long m, int *r, int *c) { return(0); }
 int	  kitty_img_from_cid(char *s, int *r, int *c) { return(0); }
 int	  kitty_img_from_data_uri(char *s, int *r, int *c) { return(0); }
+int	  kitty_img_from_url(char *s, int f, int *r, int *c, const char **e) { return(0); }
 ATTACH_S *kitty_img_attach_for_cid(char *s) { return(NULL); }
 int	  kitty_img_emit_block(gf_o_t pc, HANDLE_S **h, int k, int r, int c,
 			       ATTACH_S *a, char *alt) { return(0); }
@@ -314,6 +319,7 @@ kitty_img_shutdown(void)
     k_cache = NULL;
     k_cache_n = 0;
     k_cache_bytes = 0;
+    remote_image_clear();
 }
 
 
@@ -472,6 +478,69 @@ kitty_img_from_data_uri(char *src, int *rowsp, int *colsp)
 
     *rowsp = t->rows;
     *colsp = t->cols;
+    return(id);
+}
+
+
+/* A cache-only lookup during formatting; downloads happen on activation. */
+int
+kitty_img_from_url(char *url, int fetch, int *rowsp, int *colsp, const char **error)
+{
+    KITTY_THUMB_S *t;
+    const unsigned char *data;
+    size_t len;
+    char *key;
+    int cw, ch, id, i;
+
+    if(error)
+      *error = NULL;
+    if(!rowsp || !colsp || !remote_image_url(url))
+      return(0);
+    *rowsp = *colsp = 0;
+    if(!kitty_img_enabled()){
+	if(error)
+	  *error = _("This terminal does not support inline images");
+	return(0);
+    }
+
+    kitty_cell_pixels(&cw, &ch);
+    /* Original and preview thumbnails must never mask each other. */
+    if(fetch == REMOTE_IMAGE_ORIGINAL){
+        char *original_key = malloc(strlen(url) + sizeof("original:"));
+        if(!original_key){ if(error) *error = _("Could not allocate image key"); return 0; }
+        sprintf(original_key,"original:%s",url);
+        key = kitty_key_data(original_key,cw,ch);
+        free(original_key);
+    }
+    else key = kitty_key_data(url, cw, ch);
+    t = kitty_cache_find(key);
+    if(k_max_count > 0 && k_n >= k_max_count){
+	for(i = 0; t && i < k_n && k_imgs[i].thumb != t; i++)
+	  ;
+	if(!t || i == k_n){
+	    fs_give((void **) &key);
+	    if(error)
+	      *error = _("Inline image limit reached; increase inline-image-max-count");
+	    return(0);
+	}
+    }
+    if(!t){
+	data = remote_image_data(url, &len, fetch, error);
+	if(data){
+	    t = kitty_thumb_make(key, data, len);
+	    if(!t && error)
+	      *error = _("Image cannot be displayed (unsupported format or dimensions)");
+	}
+    }
+    fs_give((void **) &key);
+    if(!t)
+      return(0);
+
+    id = kitty_register(t);
+    if(id > 0){
+	*rowsp = t->rows;
+	*colsp = t->cols;
+    }
     return(id);
 }
 
@@ -694,7 +763,8 @@ kitty_env_kitty(void)
     if((s = getenv("TERM_PROGRAM")) != NULL
        && (!strucmp(s, "kitty")
 	   || !strucmp(s, "WezTerm")
-	   || !strucmp(s, "ghostty")))
+	   || !strucmp(s, "ghostty")
+	   || !strucmp(s, "inkline")))
       return(1);
 
     if(getenv("GHOSTTY_RESOURCES_DIR") || getenv("WEZTERM_EXECUTABLE"))
@@ -976,19 +1046,21 @@ kitty_thumb_make(const char *key, const unsigned char *data, size_t len)
     unsigned char *pix, *small = NULL, *canvas;
     int		   w = 0, h = 0, comp = 0, cw, ch, tw, th, cols, rows, y;
 
-    if(!key || !data || len == 0 || len > (size_t) KITTY_MAX_BYTES)
+    if(!key || !data || len == 0)
       return(NULL);
 
-    if(!stbi_info_from_memory(data, (int) len, &w, &h, &comp))
-      return(NULL);
-
-    if(w < KITTY_MIN_PIXELS || h < KITTY_MIN_PIXELS
-       || (long) w * (long) h > KITTY_MAX_PIXELS){
-	dprint((5, "kittyimg: rejecting %dx%d image\n", w, h));
-	return(NULL);
+    if(WebPGetInfo(data,len,&w,&h)){
+        size_t bytes;
+        if(w <= 0 || h <= 0 || w > INT_MAX / 4 || (size_t)h > SIZE_MAX / ((size_t)w * 4)) return NULL;
+        bytes = (size_t)w * (size_t)h * 4;
+        pix = (unsigned char *)malloc(bytes);
+        if(pix && !WebPDecodeRGBAInto(data,len,pix,bytes,w*4)){ free(pix); return NULL; }
     }
-
-    pix = stbi_load_from_memory(data, (int) len, &w, &h, &comp, 4);
+    else{
+        /* stb's memory decoder takes an int length, not size_t. */
+        if(len > INT_MAX) return NULL;
+        pix = stbi_load_from_memory(data,(int)len,&w,&h,&comp,4);
+    }
     if(!pix)
       return(NULL);
 

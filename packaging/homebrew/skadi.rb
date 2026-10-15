@@ -1,16 +1,20 @@
 class Skadi < Formula
   desc "Alpine mail fork with kitty and Silkie terminal support"
   homepage "https://xn--skai-dqa.goblinreactor.com/"
-  url "https://brew.goblinreactor.com/sources/skadi-0.1.0.tar.gz"
-  sha256 "6bf0dc0d757e48133af9b39b2340711f77c4379706e7b6c8a3e9764fe7d26aec"
+  url "https://brew.goblinreactor.com/sources/skadi-0.1.0-20261015.2.tar.gz"
+  sha256 "e9f385255b6c69132e59b6e78d7dad77d3118bfa26908802a8a2bf0c240bb906"
+  version "0.1.0"
+  revision 1
   license "Apache-2.0"
 
   bottle do
     root_url "https://brew.goblinreactor.com/bottles"
-    rebuild 1
-    sha256 arm64_tahoe: "e7d51e32aea69acac1639a381b4ec99bd6d01d0c6956998b26140fd76a83b675"
+    sha256 arm64_tahoe: "7bae5c731598834d4b3c04a4e128bba9b2f004208f4c422eae0bc9e4873d9710"
   end
 
+  depends_on "pkgconf" => :build
+  depends_on "zstd"
+  depends_on "webp"
   depends_on "ncurses"
   depends_on "openssl@3"
 
@@ -22,8 +26,10 @@ class Skadi < Formula
            "--with-ssl-dir=#{Formula["openssl@3"].opt_prefix}",
            "--with-ssl-certs-dir=#{etc}/openssl@3/certs"
     # c-client's historical generated-file setup is not parallel-safe.
-    system "make", "-j1", "c-client"
-    system "make"
+    # Build the client targets; Njord is an optional separate formula.
+    %w[pico pith alpine].each { |directory| system "make", "-C", directory }, "-j1", "c-client.d", "c-client"
+    # Build the client targets; Njord is an optional separate formula.
+    %w[pico pith alpine].each { |directory| system "make", "-C", directory }
     bin.install "alpine/alpine" => "skadi"
     man1.install "doc/man1/alpine.1" => "skadi.1"
     doc.install "LICENSE", "NOTICE", "README"

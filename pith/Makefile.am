@@ -24,7 +24,7 @@ noinst_PROGRAMS = help_h_gen help_c_gen
 libpith_a_SOURCES = ablookup.c abdlc.c addrbook.c addrstring.c adrbklib.c bldaddr.c body.c charset.c \
 	color.c conf.c context.c copyaddr.c detoken.c detach.c editorial.c escapes.c \
 	filter.c flag.c folder.c handle.c help.c helpindx.c hist.c icache.c ical.c imap.c init.c \
-	keyword.c kittyimg.c goblindl.c htmlbody.c offcache.c outbox.c ldap.c list.c mailcap.c mailcmd.c mailindx.c maillist.c mailview.c \
+	keyword.c kittyimg.c remoteimg.c goblindl.c htmlbody.c offcache.c outbox.c ldap.c list.c mailcap.c mailcmd.c mailindx.c maillist.c mailview.c \
 	margin.c mimedesc.c mimetype.c msgno.c newmail.c news.c pattern.c pipe.c \
 	readfile.c remote.c reply.c rfc2231.c save.c search.c sequence.c send.c sort.c \
 	state.c status.c store.c stream.c string.c strlst.c takeaddr.c tempfile.c text.c \
@@ -46,3 +46,6 @@ helptext.h: help_h_gen pine.hlp
 AM_CPPFLAGS = -I@top_builddir@/include -I@top_srcdir@/include
 
 CLEANFILES = helptext.c helptext.h help_h_gen help_c_gen
+
+EXTRA_DIST = njordsync.c stb_image.h stb_image_write.h stb_image_resize2.h remoteimg.h kittyimg.h offcache.h
+offcache.o: $(srcdir)/njordsync.c

@@ -33,6 +33,7 @@
 #include "../pith/sequence.h"
 #include "../pith/stream.h"
 #include "../pith/options.h"
+#include "../pith/offcache.h"
 
 
 /*
@@ -1081,6 +1082,13 @@ long save_fetch_append_cb(MAILSTREAM *stream, void *data, char **flags,
 	  mail_date(pkg->date, mc);
 	else
 	  *pkg->date = '\0';
+        /* Hydrate before copying headers: summary-only cache headers omit
+         * MIME boundaries/encodings needed by the body we are about to save.
+         */
+        if(offcache_is_stream(pkg->stream)
+           && !offcache_prepare_message(pkg->stream, raw))
+          return(0);
+
 	if((fetch = mail_fetch_header(pkg->stream, raw, NULL, NULL, &hlen,
 				     FT_PEEK)) != NULL){
 	    if(!*pkg->date)

@@ -681,7 +681,7 @@ struct key index_keys[] =
 	   of a message thread on and off */
 	{"/",N_("Collapse/Expand"),{MC_COLLAPSE,1,{'/'}},KS_NONE},
 	{"@", N_("Quota"), {MC_QUOTA,1,{'@'}}, KS_NONE},
-	NULL_MENU};
+	{"[",N_("PartSizes"),{MC_ATTACHINFO,1,{'['}},KS_NONE}};
 INST_KEY_MENU(index_keymenu, index_keys);
 
 
@@ -820,7 +820,7 @@ struct key att_view_keys[] =
 	/* TRANSLATORS: go to Previous URL */
 	{"^B",N_("Prev URL"),{MC_PREV_HANDLE,1,{ctrl('B')}},KS_NONE},
 	/* TRANSLATORS: go to Next URL */
-	{"^F",N_("Next URL"),{MC_NEXT_HANDLE,1,{ctrl('F')}},KS_NONE},
+	{"^F",N_("Next URL"),{MC_NEXT_HANDLE,2,{ctrl('F'),TAB}},KS_NONE},
 	PREVPAGE_MENU,
 	NEXTPAGE_MENU,
 	DELETE_MENU,
@@ -902,7 +902,7 @@ struct key view_keys[] =
 	/* TRANSLATORS: go to next URL */
 	{"^F",N_("Next URL"),{MC_NEXT_HANDLE,1,{ctrl('F')}},KS_NONE},
 	JUMP_MENU,
-	TAB_MENU,
+	{"Tab",N_("NextLink"),{MC_NEXT_HANDLE,1,{TAB}},KS_NONE},
 	HDRMODE_MENU,
 	BOUNCE_MENU,
 	FLAG_MENU,

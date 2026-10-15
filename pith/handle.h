@@ -59,6 +59,7 @@ typedef	struct handle_s {
 	    ATTACH_S *attach;		/* part the image came from, if any */
 	    unsigned placed:1;		/* a kitty placement is on screen */
 	    unsigned seen:1;		/* scratch for the paint pass */
+	    unsigned remote:1;		/* src is an HTTP(S) image URL */
 	} img;				/* stuff to describe img */
 	ATTACH_S    *attach;		/* Attachment struct for this handle */
 	struct {

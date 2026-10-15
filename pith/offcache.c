@@ -11,8 +11,9 @@
  * Program:	Offline cache for remote IMAP folders
  *
  * RAM holds envelopes, flags, headers, and any bodies already fetched.
- * Disk is read once at startup and written when a folder is closed, at
- * exit, and from the signal cleanup path, and only if something changed.
+ * Disk is read once at startup and written after a demanded message arrives,
+ * when a folder is closed, at exit, and from the signal cleanup path, and
+ * only if something changed. Index reads do not initiate downloads.
  *
  * On-disk format (AOC2, big-endian 32-bit fields, FNV-1a checksum):
  *
@@ -25,6 +26,8 @@
  *       u32 uid, size, packed(flags|date), user_flags, hms,
  *           dirty, user_dirty, hdrlen, bodylen, hdr, body
  *   u32 checksum over everything before it
+ * Flag bit 0x40 records body presence, including a genuinely empty body.
+ * Older nonempty bodies without this bit remain readable.
  *
  * AOC1 files (no dirty bits, keywords, tombstones or checksum) are
  * still read.
@@ -61,8 +64,7 @@
 #define	OC_DEF_FOLDER_MB	32L
 #define	OC_DEF_TOTAL_MB		256L
 #define	OC_DEF_MAX_AGE_DAYS	90L
-#define	OC_MAX_MSG_BODY		(4UL * OC_MB)	/* largest single body kept */
-#define	OC_MAX_HDR		(4UL * OC_MB)
+#define	OC_MAX_HDR		0xffffffffUL /* AOC's on-disk 32-bit length field */
 #define	OC_REC_MIN_V1		28UL		/* 7 x u32 */
 #define	OC_REC_MIN_V2		36UL		/* 9 x u32 */
 #define	OC_LEARN_FAST_MAX	4000L		/* fetch missing UIDs up to this */
@@ -70,16 +72,14 @@
 #define	OC_FAST_CHUNK		500
 #define	OC_PATH_TRIES		16
 
-#define	OC_STUB \
-"\r\n[Alpine: this message body is not in the offline cache.\r\n" \
-" Use Sync, or re-open the folder while connected, to fetch it.]\r\n"
-
 #define	OCF_SEEN		0x01
 #define	OCF_DELETED		0x02
 #define	OCF_FLAGGED		0x04
 #define	OCF_ANSWERED		0x08
 #define	OCF_DRAFT		0x10
 #define	OCF_RECENT		0x20
+#define	OCF_BODY_PRESENT	0x40	/* disk only: includes an empty body */
+#define OCF_FULL_HEADER          0x80    /* complete header, not synthesized envelope */
 #define	OCF_DIRTYABLE		(OCF_SEEN | OCF_DELETED | OCF_FLAGGED \
 				 | OCF_ANSWERED | OCF_DRAFT)
 
@@ -98,6 +98,8 @@ typedef struct oc_msg {
     unsigned long bodylen;
     unsigned	  wanted:1;		/* body should be fetched at learn */
     unsigned	  live:1;		/* scratch: present on the server */
+    unsigned	  transient:1;		/* readable, but exceeds disk cache limits */
+    unsigned      full_header:1;
 } OC_MSG;
 
 typedef struct oc_folder {
@@ -119,6 +121,7 @@ typedef struct oc_folder {
 
 typedef struct oc_local {
     OC_FOLDER	 *folder;
+    MAILSTREAM	 *remote;		/* private, read-only demand connection */
     char	 *scratch;
     unsigned long scratchlen;
 } OCLOCAL;
@@ -149,8 +152,10 @@ long	offcache_delete(MAILSTREAM *, char *);
 long	offcache_rename(MAILSTREAM *, char *, char *);
 MAILSTREAM *offcache_open(MAILSTREAM *);
 void	offcache_close(MAILSTREAM *, long);
+ENVELOPE *offcache_structure(MAILSTREAM *, unsigned long, BODY **, long);
 char   *offcache_header(MAILSTREAM *, unsigned long, unsigned long *, long);
 long	offcache_text(MAILSTREAM *, unsigned long, STRING *, long);
+unsigned long offcache_msgno(MAILSTREAM *, unsigned long);
 void	offcache_flagmsg(MAILSTREAM *, MESSAGECACHE *);
 long	offcache_ping(MAILSTREAM *);
 void	offcache_check(MAILSTREAM *);
@@ -175,10 +180,10 @@ DRIVER offcachedriver = {
     mail_status_default,
     offcache_open,
     offcache_close,
-    NIL, NIL, NIL, NIL,
+    NIL, NIL, NIL, offcache_structure,
     offcache_header,
     offcache_text,
-    NIL, NIL, NIL,
+    NIL, NIL, offcache_msgno,
     NIL,
     offcache_flagmsg,
     NIL, NIL, NIL,
@@ -203,7 +208,9 @@ static unsigned	 oc_hash(char *);
 static void	 oc_path_for(char *, size_t, char *);
 static char	 *oc_file_mailbox(char *);
 static char	 *oc_dup(char *, unsigned long);
-static char	 *oc_header_from_env(ENVELOPE *, unsigned long *);
+static int	 oc_header_has(char *, unsigned long, char *);
+static char	 *oc_header_from_env(ENVELOPE *, char *, unsigned long,
+				    unsigned long *);
 static void	 oc_copy_elt_flags(OC_MSG *, MESSAGECACHE *);
 static void	 oc_apply_flags(MESSAGECACHE *, OC_MSG *);
 static void	 oc_sync_keywords(OC_FOLDER *, MAILSTREAM *);
@@ -213,6 +220,11 @@ static void	 oc_expunge_seq(MAILSTREAM *, unsigned long *, unsigned long);
 static void	 oc_enforce_folder_cap(OC_FOLDER *);
 static void	 oc_enforce_total_cap(void);
 static void	 oc_learn(MAILSTREAM *, int);
+static int	 oc_fetch_message(MAILSTREAM *, OC_FOLDER *, OC_MSG *);
+static int       oc_njord_load_body(OC_FOLDER *, unsigned long, SIZEDTEXT *);
+static int       oc_njord_has_body(OC_FOLDER *, unsigned long);
+static void	 oc_make_room(OC_FOLDER *, OC_MSG *);
+static void	 oc_drop_body(OC_FOLDER *, OC_MSG *);
 static int	 oc_write_folder(OC_FOLDER *);
 static int	 oc_read_folder(char *);
 static void	 oc_hash_bytes(unsigned long *, unsigned char *, unsigned long);
@@ -220,7 +232,9 @@ static int	 oc_w32(OC_IO *, unsigned long);
 static int	 oc_r32(OC_IO *, unsigned long *);
 static int	 oc_wbytes(OC_IO *, char *, unsigned long);
 static char	 *oc_rbytes(OC_IO *, unsigned long);
-static void	 oc_so_addr(STORE_S *, char *, ADDRESS *);
+static void	 oc_so_addr(STORE_S *, char *, ADDRESS *, char *, unsigned long);
+static void	 oc_so_field(STORE_S *, char *, char *, char *, unsigned long);
+static long	 oc_so_write(void *, char *);
 static long	 oc_cfg_long(char *, long);
 static unsigned long oc_folder_cap(void);
 static unsigned long oc_total_cap(void);
@@ -397,7 +411,7 @@ offcache_real_name(char *mailbox)
 int
 offcache_skip_remote_probe(char *mbox)
 {
-    if(!offcache_enabled() || oc_live || !mbox || !mbox[0])
+    if(!offcache_enabled() || !mbox || !mbox[0])
       return(0);
 
     if(F_OFF(F_OFFLINE_CACHE_FIRST, ps_global))
@@ -583,45 +597,234 @@ offcache_learn_stream_quick(MAILSTREAM *stream)
 }
 
 
-/*
- * Remember that the viewer fetched part of this message, so its body
- * is worth caching when the folder is next learned.
+/* A part read must also preserve the complete MIME message for offline use.
+ * Do this before the caller's streaming mailgets callback consumes the part.
  */
 void
 offcache_note_fetch(MAILSTREAM *stream, unsigned long msgno)
+{
+    if(!offcache_is_stream(stream))
+      (void) offcache_prepare_message(stream, msgno);
+}
+
+
+int
+offcache_body_cached(MAILSTREAM *stream, unsigned long msgno)
+{
+    return(offcache_is_stream(stream) && LOCAL && LOCAL->folder
+           && msgno >= 1 && msgno <= LOCAL->folder->n
+           && (LOCAL->folder->msgs[msgno - 1].body != NULL ||
+               oc_njord_has_body(LOCAL->folder, LOCAL->folder->msgs[msgno - 1].uid)));
+}
+
+
+/*
+ * Explicit message demand, not a folder Sync. In particular, do not use
+ * pine_mail_open's pool, apply_pending, or note_live: fetching a body must
+ * neither run filters/flag updates nor enable automatic outbox delivery.
+ * Header/envelope-only index reads never call this function.
+ */
+int
+offcache_prepare_message(MAILSTREAM *stream, unsigned long msgno)
 {
     MESSAGECACHE *elt;
     OC_FOLDER *f;
     OC_MSG *m;
     char *mbx;
+    unsigned long uid;
+    int cached = offcache_is_stream(stream);
 
-    if(!offcache_enabled() || !stream || !offcache_cacheable_stream(stream))
-      return;
+    if(!offcache_enabled())
+      return(!cached || offcache_body_cached(stream, msgno));
+
+    if(!stream || (!cached && !offcache_cacheable_stream(stream)))
+      return(1);
 
     if(msgno < 1 || msgno > stream->nmsgs)
-      return;
+      return(0);
 
     elt = mail_elt(stream, msgno);
-    if(!elt || !elt->private.uid)
-      return;
-
-    mbx = stream->original_mailbox ? stream->original_mailbox : stream->mailbox;
-    f = oc_get(mbx);
-    if(!f)
-      return;
-
-    if(f->uidvalidity && stream->uid_validity
-       && f->uidvalidity != stream->uid_validity)
-      return;				/* learn will reset this folder */
-
-    m = oc_find_uid(f, elt->private.uid);
-    if(!m){
-	m = oc_add_msg(f);
-	m->uid = elt->private.uid;
+    if(!elt)
+      return(0);
+    if(!(uid = elt->private.uid)){
+        uid = mail_uid(stream, msgno);
+        /* A network lookup can report an EXPUNGE and invalidate elt. */
+        if(!uid || msgno > stream->nmsgs
+           || !(elt = mail_elt(stream, msgno)) || elt->private.uid != uid)
+          return(0);
     }
 
-    if(!m->body)
-      m->wanted = 1;
+    mbx = stream->original_mailbox ? stream->original_mailbox : stream->mailbox;
+    f = cached ? LOCAL->folder : oc_get(mbx);
+    if(!f)
+      return(!cached);
+
+    if(f->uidvalidity && stream->uid_validity
+       && f->uidvalidity != stream->uid_validity){
+        if(cached)
+          return(0);
+        oc_free_folder_contents(f);
+    }
+
+    /* A legacy cache with unknown UIDVALIDITY must remain unknown. The local
+     * driver's synthetic fallback value is not a server identity to trust.
+     */
+    if(!cached){
+        f->uidvalidity = stream->uid_validity;
+        f->uidlast = stream->uid_last;
+        oc_sync_keywords(f, stream);
+    }
+
+    m = oc_find_uid(f, uid);
+    if(!m){
+	m = oc_add_msg(f);
+	m->uid = uid;
+        m->size = elt->rfc822_size;
+        oc_copy_elt_flags(m, elt);
+        m->day = elt->day; m->month = elt->month; m->year = elt->year;
+        m->hours = elt->hours; m->minutes = elt->minutes; m->seconds = elt->seconds;
+    }
+
+    if(m->body)
+      return(1);
+
+    m->wanted = 1;
+    /* A live stream can still serve individual parts if full caching fails. */
+    return(oc_fetch_message(stream, f, m) || !cached);
+}
+
+
+static int
+oc_fetch_message(MAILSTREAM *stream, OC_FOLDER *f, OC_MSG *m)
+{
+    MAILSTREAM *remote = stream;
+    SIZEDTEXT *raw = NULL;
+    SIZEDTEXT disk_raw = {0};
+    unsigned long i, hl = 0;
+    void *old_gets;
+    int cached = offcache_is_stream(stream), fetched = 0, attempt;
+    int reconnect = cached && LOCAL->remote != NULL;
+    int we_cancel = busy_cue(_("Fetching message for offline use"), NULL, 1);
+    char *error = NULL;
+
+    if(oc_njord_load_body(f, m->uid, &disk_raw)){
+        raw = &disk_raw;
+        goto have_raw;
+    }
+
+    for(attempt = 0; attempt <= reconnect; attempt++){
+        raw = NULL;
+        if(cached){
+            if(!LOCAL->remote){
+                long flags = OP_READONLY | OP_SILENT;
+                if(F_ON(F_PREFER_ALT_AUTH, ps_global))
+                  flags |= OP_TRYALT;
+                LOCAL->remote = mail_open(NULL, f->mailbox, flags);
+            }
+            remote = LOCAL->remote;
+        }
+
+        if(!remote){
+            error = _("Message is not cached and the server could not be reached. Reopen it to retry.");
+            break;
+        }
+
+        if(!f->uidvalidity || remote->uid_validity != f->uidvalidity){
+            error = _("Folder identity changed on the server; cannot fetch this cached message safely.");
+            break;
+        }
+
+        /* Use UID FETCH itself, not a sequence-number fetch after a UID lookup.
+         * An intervening EXPUNGE must never substitute a different message.
+         * Suppress the caller's mailgets only for our private full-message read.
+         */
+        old_gets = mail_parameters(NULL, GET_GETS, NULL);
+        mail_parameters(NULL, SET_GETS, NULL);
+        fetched = remote->dtb && remote->dtb->msgdata
+                  && (*remote->dtb->msgdata)(remote, m->uid, "", 0, 0, NULL,
+                                            FT_UID | FT_PEEK);
+        mail_parameters(NULL, SET_GETS, old_gets);
+
+        if(fetched && remote->uid_validity == f->uidvalidity){
+            for(i = 1; i <= remote->nmsgs; i++){
+                MESSAGECACHE *elt = mail_elt(remote, i);
+                if(elt->private.uid == m->uid){
+                    raw = &elt->private.msg.full.text;
+                    break;
+                }
+            }
+        }
+
+        if(raw && raw->data && raw->size)
+          break;
+
+        raw = NULL;
+        if(cached){
+            mail_close(LOCAL->remote);
+            LOCAL->remote = NULL;
+        }
+        error = _("Message could not be downloaded (connection lost or message removed). Reopen it to retry.");
+    }
+
+have_raw:
+    if(raw && raw->data && raw->size){
+        /* Locate the first empty header line without trusting NUL termination. */
+        for(i = 0; i < raw->size && i < OC_MAX_HDR; i++){
+            if(raw->data[i] == '\n'
+               && (i == 0 || (i == 1 && raw->data[0] == '\r')
+                   || raw->data[i - 1] == '\n'
+                   || (i > 1 && raw->data[i - 1] == '\r'
+                       && raw->data[i - 2] == '\n'))){
+                hl = i + 1;
+                break;
+            }
+        }
+    }
+
+    if(hl){
+        if(m->hdr)
+          fs_give((void **) &m->hdr);
+        m->hdr = oc_dup((char *) raw->data, hl);
+        m->hdrlen = hl;
+        m->full_header = 1;
+        m->bodylen = raw->size - hl;
+        m->body = oc_dup((char *) raw->data + hl, m->bodylen);
+        m->size = raw->size;
+        /* The dedicated fetch made this buffer. Retaining a second complete
+         * copy in c-client would bypass our quotas, especially on the tablet.
+         */
+        fs_give((void **) &raw->data);
+        raw->size = 0;
+        m->wanted = 0;
+        f->body_bytes += m->bodylen;
+        f->last_used = (unsigned long) time(NULL);
+        f->dirty = 1;
+        oc_make_room(f, m);
+
+        /* Persist now, not just on clean exit. A failed download never writes
+         * a placeholder, partial literal, or replacement for the old header.
+         */
+        offcache_save_all();
+        if(f->dirty)
+          q_status_message(SM_ORDER | SM_DING, 3, 5,
+                           _("Message downloaded, but its offline cache could not be saved to disk"));
+        if(m->transient && !oc_njord_has_body(f,m->uid))
+          q_status_message(SM_ORDER | SM_DING, 3, 5,
+                           _("Message exceeds offline cache limits; readable now, but not saved for offline use"));
+    }
+    else{
+        if(cached && LOCAL->remote){
+            mail_close(LOCAL->remote);
+            LOCAL->remote = NULL;
+        }
+        q_status_message(SM_ORDER, 3, 5, error ? error
+                         : _("Could not download a complete message for offline use. Reopen it to retry."));
+    }
+
+    if(we_cancel)
+      cancel_busy_cue(-1);
+    if(disk_raw.data) fs_give((void **)&disk_raw.data);
+    return(hl != 0);
 }
 
 
@@ -701,7 +904,7 @@ oc_learn(MAILSTREAM *stream, int allow_net)
     }
 
     cap = oc_folder_cap();
-    msg_cap = OC_MAX_MSG_BODY;
+    msg_cap = min(cap, oc_total_cap());
 
     if(allow_net){
 	for(i = 0; i < f->n; i++)
@@ -718,6 +921,7 @@ oc_learn(MAILSTREAM *stream, int allow_net)
 	ENVELOPE *env;
 	SIZEDTEXT *hdrt, *fullt, *textt;
 	unsigned long uid, newflags;
+	int have_full_header = 0;
 
 	if(!elt)
 	  continue;
@@ -765,7 +969,8 @@ oc_learn(MAILSTREAM *stream, int allow_net)
 	hdrt = &elt->private.msg.header.text;
 	fullt = &elt->private.msg.full.text;
 	textt = &elt->private.msg.text.text;
-	env = elt->private.msg.env;
+	env = stream->scache ? (stream->msgno == i ? stream->env : NULL)
+			     : elt->private.msg.env;
 
 	if(fullt->data && fullt->size){
 	    char *p = (char *) fullt->data, *split;
@@ -776,7 +981,7 @@ oc_learn(MAILSTREAM *stream, int allow_net)
 	    else if((split = strstr(p, "\n\n")) != NULL)
 	      split += 2;
 
-	    if(split && split > p && (unsigned long) (split - p) < fullt->size){
+	    if(split && split > p && (unsigned long) (split - p) <= fullt->size){
 		hl = (unsigned long) (split - p);
 		if(hl <= OC_MAX_HDR){
 		    if(m->hdr)
@@ -784,6 +989,8 @@ oc_learn(MAILSTREAM *stream, int allow_net)
 
 		    m->hdr = oc_dup(p, hl);
 		    m->hdrlen = hl;
+		    m->full_header = 1;
+		    have_full_header = 1;
 		}
 
 		if(!m->body && fullt->size - hl <= msg_cap
@@ -794,15 +1001,49 @@ oc_learn(MAILSTREAM *stream, int allow_net)
 		}
 	    }
 	}
-	else if(hdrt->data && hdrt->size && hdrt->size <= OC_MAX_HDR){
+	/* A non-null lines list means HEADER.FIELDS, not a full header. */
+	if(!have_full_header && !elt->private.msg.lines
+	   && hdrt->data && hdrt->size && hdrt->size <= OC_MAX_HDR){
 	    if(m->hdr)
 	      fs_give((void **) &m->hdr);
 
 	    m->hdr = oc_dup((char *) hdrt->data, hdrt->size);
 	    m->hdrlen = hdrt->size;
+	    m->full_header = 1;
+	    have_full_header = 1;
 	}
-	else if(!m->hdr && env)
-	  m->hdr = oc_header_from_env(env, &m->hdrlen);
+
+	if(!have_full_header){
+	    /* Repair old partial-only entries when already learning online.
+	     * Quick learning, startup and offline reads never fetch anything.
+	     * Request only the envelope, not a body or a message-state change.
+	     */
+	    if(allow_net && m->hdr && !oc_header_has(m->hdr, m->hdrlen, "From")
+	       && (!env || env->incomplete))
+	      env = mail_fetch_structure(stream, i, NULL, FT_PEEK | FT_NOLOOKAHEAD);
+
+	    if(env && !env->incomplete){
+		char *base = m->hdr, *header;
+		unsigned long base_len = m->hdrlen, len;
+
+		/* Keep a previously saved full header (including its MIME fields).
+		 * Otherwise retain the partial extras and add the envelope fields
+		 * they omit. This also repairs already-persisted partial headers.
+		 */
+		if(!base && hdrt->data && hdrt->size <= OC_MAX_HDR){
+		    base = (char *) hdrt->data;
+		    base_len = hdrt->size;
+		}
+
+		header = oc_header_from_env(env, base, base_len, &len);
+		if(header){
+		    if(m->hdr)
+		      fs_give((void **) &m->hdr);
+		    m->hdr = header;
+		    m->hdrlen = len;
+		}
+	    }
+	}
 
 	if(!m->body && textt->data && textt->size
 	   && textt->size <= msg_cap && f->body_bytes + textt->size <= cap){
@@ -812,28 +1053,8 @@ oc_learn(MAILSTREAM *stream, int allow_net)
 	}
 
 	if(m->wanted && !m->body && allow_net
-	   && elt->rfc822_size <= msg_cap
-	   && f->body_bytes + elt->rfc822_size <= cap){
-	    char *t;
-	    unsigned long len = 0;
-
-	    if(!m->hdr){
-		t = mail_fetch_header(stream, i, NIL, NIL, &len, FT_PEEK);
-		if(t && len && len <= OC_MAX_HDR){
-		    m->hdr = oc_dup(t, len);
-		    m->hdrlen = len;
-		}
-	    }
-
-	    len = 0;
-	    t = mail_fetch_text(stream, i, NIL, &len, FT_PEEK);
-	    if(t && len && len <= msg_cap){
-		m->body = oc_dup(t, len);
-		m->bodylen = len;
-		f->body_bytes += len;
-		fetched++;
-	    }
-	}
+           && oc_fetch_message(stream, f, m))
+          fetched++;
 
 	if(m->body)
 	  m->wanted = 0;
@@ -1179,14 +1400,96 @@ offcache_open(MAILSTREAM *stream)
 void
 offcache_close(MAILSTREAM *stream, long int options)
 {
+    unsigned long i;
     (void) options;
     if(!stream || !stream->local)
       return;
+
+    if(LOCAL->remote)
+      mail_close(LOCAL->remote);
+
+    if(LOCAL->folder)
+      for(i = 0; i < LOCAL->folder->n; i++)
+        if(LOCAL->folder->msgs[i].transient)
+          oc_drop_body(LOCAL->folder, &LOCAL->folder->msgs[i]);
 
     if(LOCAL->scratch)
       fs_give((void **) &LOCAL->scratch);
 
     fs_give((void **) &stream->local);
+}
+
+
+/* Parse MIME only after hydration. The generic local-driver implementation
+ * copies the header before calling text(), which is too late to replace an
+ * envelope-only cached header with the real MIME header on a cache miss.
+ */
+ENVELOPE *
+offcache_structure(MAILSTREAM *stream, unsigned long msgno, BODY **body, long flags)
+{
+    ENVELOPE **env;
+    BODY **b;
+    MESSAGECACHE *elt;
+    OC_MSG *m;
+    STRING bs;
+    char *header;
+    int hydrated = 0;
+
+    if(body)
+      *body = NULL;
+    if(!stream)
+      return(NULL);
+    if(flags & FT_UID)
+      msgno = mail_msgno(stream, msgno);
+    if(!stream || !LOCAL || !LOCAL->folder || msgno < 1
+       || msgno > LOCAL->folder->n)
+      return(NULL);
+
+    m = &LOCAL->folder->msgs[msgno - 1];
+    if(body && !m->body){
+        if(!offcache_prepare_message(stream, msgno))
+          return(NULL);
+        hydrated = 1;
+    }
+
+    elt = mail_elt(stream, msgno);
+    if(hydrated)
+      elt->rfc822_size = m->size;
+    if(stream->scache){
+        if(stream->msgno != msgno){
+            mail_gc(stream, GC_ENV | GC_TEXTS);
+            stream->msgno = msgno;
+        }
+        env = &stream->env;
+        b = &stream->body;
+    }
+    else{
+        env = &elt->private.msg.env;
+        b = &elt->private.msg.body;
+    }
+
+    if(hydrated || !*env || (*env)->incomplete || (body && !*b)){
+        mail_free_envelope(env);
+        mail_free_body(b);
+        header = oc_dup(m->hdr ? m->hdr : "", m->hdr ? m->hdrlen : 0);
+        if(body){
+            INIT(&bs, mail_string, (void *) m->body, m->bodylen);
+            rfc822_parse_msg(env, b, header, m->hdrlen, &bs, BADHOST,
+                             offcachedriver.flags);
+        }
+        else
+          rfc822_parse_msg(env, NULL, header, m->hdrlen, NULL, BADHOST,
+                           offcachedriver.flags);
+        fs_give((void **) &header);
+    }
+
+    if(!elt->day && *env && (*env)->date)
+      mail_parse_date(elt, (*env)->date);
+    if(!elt->day)
+      elt->day = elt->month = 1;
+    if(body)
+      *body = *b;
+    return(*env);
 }
 
 
@@ -1234,7 +1537,6 @@ offcache_text(MAILSTREAM *stream, unsigned long msgno, STRING *bs, long int flag
     char *p;
     unsigned long n;
     MESSAGECACHE *elt;
-    static unsigned long last_stub_uid = 0;
 
     if(flags & FT_UID)
       return(NIL);
@@ -1244,6 +1546,10 @@ offcache_text(MAILSTREAM *stream, unsigned long msgno, STRING *bs, long int flag
       return(NIL);
 
     m = &LOCAL->folder->msgs[msgno - 1];
+    if(!m->body && !offcache_prepare_message(stream, msgno)){
+        INIT(bs, mail_string, (void *) "", 0);
+        return(NIL);
+    }
     elt = mail_elt(stream, msgno);
     if(!(flags & FT_PEEK) && elt && !elt->seen){
 	elt->seen = T;
@@ -1253,20 +1559,8 @@ offcache_text(MAILSTREAM *stream, unsigned long msgno, STRING *bs, long int flag
 	MM_FLAGS(stream, msgno);
     }
 
-    if(m->body && m->bodylen){
-	p = m->body;
-	n = m->bodylen;
-    }
-    else{
-	p = OC_STUB;
-	n = strlen(p);
-	m->wanted = 1;
-	if(m->uid != last_stub_uid){
-	    last_stub_uid = m->uid;
-	    q_status_message(SM_ORDER, 0, 3,
-		_("Body not in offline cache; Sync to fetch it"));
-	}
-    }
+    p = m->body;
+    n = m->bodylen;
 
     INIT(bs, mail_string, (void *) p, n);
     return(LONGT);
@@ -1293,6 +1587,21 @@ offcache_flagmsg(MAILSTREAM *stream, MESSAGECACHE *elt)
     m->flags = tmp.flags;
     m->user_flags = tmp.user_flags;
     LOCAL->folder->dirty = 1;
+}
+
+
+/* Demand reads may learn messages in viewing order, not ascending UID order.
+ * Do not use c-client's default binary search over message sequence numbers.
+ */
+unsigned long
+offcache_msgno(MAILSTREAM *stream, unsigned long uid)
+{
+    unsigned long i;
+    if(stream && LOCAL && LOCAL->folder)
+      for(i = 0; i < LOCAL->folder->n; i++)
+        if(LOCAL->folder->msgs[i].uid == uid)
+          return(i + 1);
+    return(0);
 }
 
 
@@ -1497,10 +1806,8 @@ oc_remove_msg(OC_FOLDER *f, unsigned long idx)
     if(!f || idx >= f->n)
       return;
 
-    if(f->msgs[idx].bodylen > f->body_bytes)
-      f->body_bytes = 0;
-    else
-      f->body_bytes -= f->msgs[idx].bodylen;
+    if(!f->msgs[idx].transient)
+      f->body_bytes -= min(f->body_bytes, f->msgs[idx].bodylen);
 
     oc_free_msg(&f->msgs[idx]);
     if(idx + 1 < f->n)
@@ -1567,6 +1874,68 @@ oc_sync_keywords(OC_FOLDER *f, MAILSTREAM *stream)
 
 
 static void
+oc_drop_body(OC_FOLDER *f, OC_MSG *m)
+{
+    if(!m->body)
+      return;
+    if(!m->transient)
+      f->body_bytes -= min(f->body_bytes, m->bodylen);
+    fs_give((void **) &m->body);
+    m->bodylen = 0;
+    m->transient = 0;
+    f->dirty = 1;
+}
+
+
+/* Prefer the message just requested over older cached bodies. Do not discard
+ * headers, pending flag changes, or tombstones to make space. Oversize messages
+ * remain readable in this session, with an explicit persistence warning.
+ */
+static void
+oc_make_room(OC_FOLDER *keep_folder, OC_MSG *keep)
+{
+    OC_FOLDER *f, *victim;
+    unsigned long i, total, folder_cap = oc_folder_cap(), total_cap = oc_total_cap();
+
+    /* Keep at most the current oversize message outside the body budget. */
+    for(f = oc_folders; f; f = f->next)
+      for(i = 0; i < f->n; i++)
+        if(&f->msgs[i] != keep && f->msgs[i].transient)
+          oc_drop_body(f, &f->msgs[i]);
+
+    if(keep->bodylen > folder_cap || keep->bodylen > total_cap){
+        keep->transient = 1;
+        keep_folder->body_bytes -= keep->bodylen;
+        return;
+    }
+
+    for(i = 0; i < keep_folder->n && keep_folder->body_bytes > folder_cap; i++)
+      if(&keep_folder->msgs[i] != keep)
+        oc_drop_body(keep_folder, &keep_folder->msgs[i]);
+
+    for(;;){
+        total = 0;
+        victim = NULL;
+        for(f = oc_folders; f; f = f->next){
+            total += f->body_bytes;
+            if(f->body_bytes > (f == keep_folder ? keep->bodylen : 0)
+               && (!victim || f->last_used < victim->last_used))
+              victim = f;
+        }
+        if(total <= total_cap || !victim)
+          break;
+        for(i = 0; i < victim->n && total > total_cap; i++){
+            OC_MSG *m = &victim->msgs[i];
+            if(m != keep && m->body && !m->transient){
+                total -= m->bodylen;
+                oc_drop_body(victim, m);
+            }
+        }
+    }
+}
+
+
+static void
 oc_enforce_folder_cap(OC_FOLDER *f)
 {
     unsigned long cap = oc_folder_cap(), i;
@@ -1577,16 +1946,8 @@ oc_enforce_folder_cap(OC_FOLDER *f)
     for(i = 0; i < f->n && f->body_bytes > cap; i++){
 	OC_MSG *m = &f->msgs[i];
 
-	if(m->body){
-	    if(m->bodylen > f->body_bytes)
-	      f->body_bytes = 0;
-	    else
-	      f->body_bytes -= m->bodylen;
-
-	    fs_give((void **) &m->body);
-	    m->bodylen = 0;
-	    f->dirty = 1;
-	}
+	if(!m->transient)
+          oc_drop_body(f, m);
     }
 }
 
@@ -1616,10 +1977,8 @@ oc_enforce_total_cap(void)
 	    for(i = 0; i < victim->n; i++){
 		OC_MSG *m = &victim->msgs[i];
 
-		if(m->body){
-		    fs_give((void **) &m->body);
-		    m->bodylen = 0;
-		}
+		if(!m->transient)
+                  oc_drop_body(victim, m);
 	    }
 
 	    victim->body_bytes = 0;
@@ -1728,27 +2087,70 @@ oc_dup(char *s, unsigned long n)
 }
 
 
-static void
-oc_so_addr(STORE_S *so, char *name, ADDRESS *a)
+/* Search field names only, stopping at the header/body separator. */
+static int
+oc_header_has(char *header, unsigned long len, char *name)
 {
-    char tmp[MAILTMPLEN];
+    char *p, *end, *nl;
+    size_t n = strlen(name);
 
-    if(!so || !name || !a)
-      return;
+    if(!header)
+      return(0);
+    for(p = header, end = header + len; p < end; p = nl + 1){
+	if(*p == '\r' || *p == '\n')
+	  break;
+	if((size_t) (end - p) > n && p[n] == ':' && !struncmp(p, name, n))
+	  return(1);
+	if(!(nl = memchr(p, '\n', end - p)))
+	  break;
+    }
+    return(0);
+}
 
-    tmp[0] = '\0';
-    rfc822_write_address(tmp, a);
-    if(!tmp[0])
+
+static long
+oc_so_write(void *store, char *text)
+{
+    return(so_puts((STORE_S *) store, text));
+}
+
+
+static void
+oc_so_addr(STORE_S *so, char *name, ADDRESS *a, char *header, unsigned long len)
+{
+    char tmp[1024];
+    RFC822BUFFER buf;
+
+    if(!a || oc_header_has(header, len, name))
       return;
 
     so_puts(so, name);
-    so_puts(so, tmp);
+    so_puts(so, ": ");
+    buf.f = oc_so_write;
+    buf.s = so;
+    buf.beg = buf.cur = tmp;
+    buf.end = tmp + sizeof(tmp) - 1;
+    rfc822_output_address_list(&buf, a, 0L, NULL);
+    rfc822_output_flush(&buf);
     so_puts(so, "\r\n");
 }
 
 
+static void
+oc_so_field(STORE_S *so, char *name, char *value, char *header, unsigned long len)
+{
+    if(value && !oc_header_has(header, len, name)){
+	so_puts(so, name);
+	so_puts(so, ": ");
+	so_puts(so, value);
+	so_puts(so, "\r\n");
+    }
+}
+
+
 static char *
-oc_header_from_env(ENVELOPE *env, unsigned long *lenp)
+oc_header_from_env(ENVELOPE *env, char *header, unsigned long len,
+		   unsigned long *lenp)
 {
     STORE_S *so;
     char *s;
@@ -1763,43 +2165,25 @@ oc_header_from_env(ENVELOPE *env, unsigned long *lenp)
     if(!so)
       return(NULL);
 
-    if(env->date){
-	so_puts(so, "Date: ");
-	so_puts(so, (char *) env->date);
-	so_puts(so, "\r\n");
-    }
+    oc_so_field(so, "Date", (char *) env->date, header, len);
+    oc_so_addr(so, "From", env->from, header, len);
+    oc_so_addr(so, "Sender", env->sender, header, len);
+    oc_so_addr(so, "Reply-To", env->reply_to, header, len);
+    oc_so_addr(so, "To", env->to, header, len);
+    oc_so_addr(so, "Cc", env->cc, header, len);
+    oc_so_addr(so, "Bcc", env->bcc, header, len);
+    oc_so_field(so, "Subject", env->subject, header, len);
+    oc_so_field(so, "Message-ID", env->message_id, header, len);
+    oc_so_field(so, "In-Reply-To", env->in_reply_to, header, len);
+    oc_so_field(so, "References", env->references, header, len);
 
-    oc_so_addr(so, "From: ", env->from);
-    oc_so_addr(so, "Sender: ", env->sender);
-    oc_so_addr(so, "Reply-To: ", env->reply_to);
-    oc_so_addr(so, "To: ", env->to);
-    oc_so_addr(so, "Cc: ", env->cc);
-    if(env->subject){
-	so_puts(so, "Subject: ");
-	so_puts(so, env->subject);
-	so_puts(so, "\r\n");
-    }
+    if(header && len)
+      so_nputs(so, header, (long) len);
+    else
+      so_puts(so, "\r\n");
 
-    if(env->message_id){
-	so_puts(so, "Message-ID: ");
-	so_puts(so, env->message_id);
-	so_puts(so, "\r\n");
-    }
-
-    if(env->in_reply_to){
-	so_puts(so, "In-Reply-To: ");
-	so_puts(so, env->in_reply_to);
-	so_puts(so, "\r\n");
-    }
-
-    if(env->references){
-	so_puts(so, "References: ");
-	so_puts(so, env->references);
-	so_puts(so, "\r\n");
-    }
-
-    so_puts(so, "\r\n");
-    s = cpystr((char *) so_text(so));
+    s = (char *) so_text(so);
+    s = s && strlen(s) <= OC_MAX_HDR ? cpystr(s) : NULL;
     if(lenp)
       *lenp = s ? strlen(s) : 0;
 
@@ -2001,7 +2385,9 @@ oc_write_folder(OC_FOLDER *f)
 	if(!(m->hdr && m->hdrlen))
 	  continue;
 
-	packed = (m->flags & 0xff)
+	packed = (m->flags & ~(OCF_BODY_PRESENT | OCF_FULL_HEADER) & 0xff)
+		 | ((m->body && !m->transient) ? OCF_BODY_PRESENT : 0)
+		 | (m->full_header ? OCF_FULL_HEADER : 0)
 		 | ((m->day & 0x1f) << 8)
 		 | ((m->month & 0x0f) << 13)
 		 | ((m->year & 0x7f) << 17);
@@ -2015,9 +2401,9 @@ oc_write_folder(OC_FOLDER *f)
 	   || !oc_w32(&io, m->dirty)
 	   || !oc_w32(&io, m->user_dirty)
 	   || !oc_w32(&io, m->hdrlen)
-	   || !oc_w32(&io, m->body ? m->bodylen : 0)
+	   || !oc_w32(&io, m->body && !m->transient ? m->bodylen : 0)
 	   || !oc_wbytes(&io, m->hdr, m->hdrlen)
-	   || !oc_wbytes(&io, m->body, m->body ? m->bodylen : 0))
+	   || !oc_wbytes(&io, m->body, m->body && !m->transient ? m->bodylen : 0))
 	  goto fail;
     }
 
@@ -2032,7 +2418,8 @@ oc_write_folder(OC_FOLDER *f)
       goto fail;
 
 #ifndef	_WINDOWS
-    (void) fsync(fileno(fp));
+    if(fsync(fileno(fp)) != 0)
+      goto fail;
 #endif
     if(fclose(fp) != 0){
 	fp = NULL;
@@ -2054,6 +2441,8 @@ oc_write_folder(OC_FOLDER *f)
     our_unlink(tmp);
     return(-1);
 }
+
+#include "njordsync.c"
 
 
 static int
@@ -2207,7 +2596,8 @@ oc_read_folder(char *path)
 	   || !oc_r32(&io, &m->bodylen))
 	  goto fail;
 
-	m->flags = packed & 0xff;
+	m->flags = packed & ~(OCF_BODY_PRESENT | OCF_FULL_HEADER) & 0xff;
+	m->full_header = (packed & OCF_FULL_HEADER) != 0;
 	m->day = (packed >> 8) & 0x1f;
 	m->month = (packed >> 13) & 0x0f;
 	m->year = (packed >> 17) & 0x7f;
@@ -2216,7 +2606,9 @@ oc_read_folder(char *path)
 	m->seconds = hms & 0x3f;
 	m->dirty &= OCF_DIRTYABLE;
 
-	if(m->hdrlen > OC_MAX_HDR || m->bodylen > OC_MAX_MSG_BODY)
+	remaining = (unsigned long) sb.st_size - (unsigned long) ftell(fp);
+	if(m->hdrlen > OC_MAX_HDR || m->hdrlen > remaining
+           || m->bodylen > remaining - m->hdrlen)
 	  goto fail;
 
 	if(m->hdrlen){
@@ -2244,6 +2636,8 @@ oc_read_folder(char *path)
 		body_bytes += m->bodylen;
 	    }
 	}
+        else if(packed & OCF_BODY_PRESENT)
+          m->body = oc_dup("", 0);
     }
 
     if(v2){

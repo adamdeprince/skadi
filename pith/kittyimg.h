@@ -43,6 +43,7 @@ void	  kitty_img_note_resize(void);
 int	  kitty_img_from_part(ATTACH_S *, long, int *, int *);
 int	  kitty_img_from_cid(char *, int *, int *);
 int	  kitty_img_from_data_uri(char *, int *, int *);
+int	  kitty_img_from_url(char *, int, int *, int *, const char **);
 ATTACH_S *kitty_img_attach_for_cid(char *);
 char	 *kitty_img_alt(char *, char *, size_t);
 int	  kitty_img_emit_block(gf_o_t, HANDLE_S **, int, int, int, ATTACH_S *, char *);

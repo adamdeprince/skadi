@@ -872,6 +872,7 @@ long mail_valid_net_parse_work (char *name,NETMBX *mb,char *service)
 	else if (!compare_cstring (s,"readonly")) mb->readonlyflag = T;
 	else if (!compare_cstring (s,"secure")) mb->secflag = T;
 	else if (!compare_cstring (s,"norsh")) mb->norsh = T;
+	else if (!compare_cstring (s,"njord")) mb->njordflag = T;
 	else if (!compare_cstring (s,"loser")) mb->loser = T;
 	else if ((!compare_cstring (s,"starttls") || !compare_cstring (s,"tls")) && !mb->notlsflag)
 	  mb->tlsflag = T;
@@ -933,6 +934,12 @@ long mail_valid_net_parse_work (char *name,NETMBX *mb,char *service)
   if (!*mb->mailbox) strcpy (mb->mailbox,"INBOX");
 				/* default service name */
   if (!*mb->service) strcpy (mb->service,service);
+  if (mb->njordflag) {
+    if (strcmp (mb->service,"imap") || mb->tlsflag || mb->trysslflag) return NIL;
+    /* Njord terminates provider TLS. Use implicit TLS or a local tunnel here. */
+    mb->norsh = mb->notlsflag = T;
+    if (!mb->port) mb->port = 1143;
+  }
 				/* /norsh only valid if imap */
   if (mb->norsh && strcmp (mb->service,"imap")) return NIL;
   return T;
@@ -5645,11 +5652,13 @@ long mail_usable_network_stream (MAILSTREAM *stream,char *name)
 	     ((!compare_cstring (smb.host,trustdns ?
 				 (s = tcp_canonical (nmb.host)) : nmb.host) &&
 	       !strcmp (smb.service,nmb.service) &&
+	       (smb.njordflag == nmb.njordflag) &&
 	       (!nmb.port || (smb.port == nmb.port)) &&
 	       (nmb.anoflag == stream->anonymous) &&
 	       (!nmb.user[0] || !strcmp (smb.user,nmb.user))) ||
 	      (!compare_cstring (omb.host,nmb.host) &&
 	       !strcmp (omb.service,nmb.service) &&
+	       (omb.njordflag == nmb.njordflag) &&
 	       (!nmb.port || (omb.port == nmb.port)) &&
 	       (nmb.anoflag == stream->anonymous) &&
 	       (!nmb.user[0] || !strcmp (omb.user,nmb.user))))) ? LONGT : NIL;
@@ -6281,6 +6290,10 @@ static NETDRIVER tcpdriver = {
   tcp_getsize			/* read a specific number of bytes */
 };
 
+#ifndef _WINDOWS
+#include "njord_transport.c"
+#endif
+
 
 /* Network open
  * Accepts: NETMBX specifier to open
@@ -6305,6 +6318,15 @@ NETSTREAM *net_open (NETMBX *mb,NETDRIVER *dv,unsigned long port,
   if (strlen (mb->host) >= NETMAXHOST) {
     sprintf (tmp,"Invalid host name: %.80s",mb->host);
     MM_LOG (tmp,ERROR);
+  }
+  else if (mb->njordflag) {
+#ifndef _WINDOWS
+    if (mb->sslflag && !ssld) MM_LOG ("TLS driver unavailable for Njord",ERROR);
+    else stream = njord_wrap(net_open_work(mb->sslflag ? ssld : &tcpdriver,
+                                           mb->host,NIL,1143,mb->port,flags));
+#else
+    MM_LOG ("Njord transport is not available in this Windows build",ERROR);
+#endif
   }
 				/* use designated driver if given */
   else if (dv) stream = net_open_work (dv,mb->host,mb->service,port,mb->port,

@@ -425,7 +425,7 @@ target_alias = @target_alias@
 top_build_prefix = @top_build_prefix@
 top_builddir = @top_builddir@
 top_srcdir = @top_srcdir@
-EXTRA_DIST = config.rpath VERSION README LICENSE njord/njord njord/Makefile njord/README.md njord/test_njord.py doc/man1/njord.1
+EXTRA_DIST = config.rpath VERSION README LICENSE njord/njord.cpp njord/image.cpp njord/image.h njord/Makefile njord/README.md njord/test_njord.py njord/test_skadi.c njord/Makefile.integration imap/src/c-client/njord_codec.h imap/src/c-client/njord_transport.c doc/man1/njord.1
 SUBDIRS = m4 po $(REGEX_BUILD) pith pico alpine $(WEB_PUBCOOKIE_BUILD) $(WEB_BUILD)
 BUILT_SOURCES = c-client.d c-client $(WEB_PUBCOOKIE_LINK)
 CLEANFILES = c-client
@@ -833,7 +833,7 @@ distcleancheck: distclean
 check-am: all-am
 check: $(BUILT_SOURCES)
 	$(MAKE) $(AM_MAKEFLAGS) check-recursive
-all-am: Makefile $(MANS)
+all-am: Makefile $(MANS) all-local
 installdirs: installdirs-recursive
 installdirs-am:
 	for dir in "$(DESTDIR)$(man1dir)"; do \
@@ -947,7 +947,7 @@ uninstall-man: uninstall-man1
 .MAKE: $(am__recursive_targets) all check install install-am \
 	install-strip
 
-.PHONY: $(am__recursive_targets) CTAGS GTAGS TAGS all all-am \
+.PHONY: $(am__recursive_targets) CTAGS GTAGS TAGS all all-am all-local \
 	am--refresh check check-am clean clean-cscope clean-generic \
 	clean-libtool clean-local cscope cscopelist-am ctags ctags-am \
 	dist dist-all dist-bzip2 dist-gzip dist-lzip dist-shar \
@@ -980,8 +980,12 @@ c-client:
 gssapi_proxy.l:
 	if test ! -L c-client/auth_gss_proxy.c ; then $(LN_S) @abs_top_srcdir@/web/src/pubcookie/auth_gss_proxy.c c-client/auth_gss_proxy.c ; fi
 
+all-local:
+	$(MAKE) -C $(srcdir)/njord
+
 clean-local:
 	cd imap && $(MAKE) clean
+	$(MAKE) -C $(srcdir)/njord clean
 
 install-exec-local:
 	cd imap && $(MAKE) install-mailutil BUNDLED="$(C_CLIENT_BUNDLED)" DESTDIR="$(DESTDIR)" bindir="$(bindir)" mandir="$(mandir)"

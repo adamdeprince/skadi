@@ -1,0 +1,7 @@
+# Include alongside the configured alpine/Makefile, after the regular build.
+.PHONY: build-njord-integration
+build-njord-integration:
+	@test -n "$(TEST_DIR)" && test -d "$(TEST_DIR)"
+	$(COMPILE) -Dmain=alpine_application_main -c alpine.c -o "$(TEST_DIR)/alpine-main.o"
+	$(COMPILE) -c ../njord/test_skadi.c -o "$(TEST_DIR)/test-skadi.o"
+	$(CCLD) $(AM_CFLAGS) $(CFLAGS) $(AM_LDFLAGS) $(LDFLAGS) -o "$(TEST_DIR)/test-skadi" "$(TEST_DIR)/test-skadi.o" "$(TEST_DIR)/alpine-main.o" $(filter-out alpine.o,$(alpine_OBJECTS)) $(alpine_LDADD) $(LIBS)

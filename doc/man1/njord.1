@@ -1,15 +1,16 @@
-.TH NJORD 1 "October 2026" "Njord 0.1.1"
+.TH NJORD 1 "October 2026" "Njord 0.1.0"
 .SH NAME
-njord \- Skadi's transparent IMAP forwarding proxy
+njord \- Skadi's optional compressed IMAP proxy
 .SH SYNOPSIS
 .B njord --upstream
 .I hostname
 .RI [ options ]
 .SH DESCRIPTION
 Njord forwards bytes between each client and a separate provider connection.
-This initial version does not implement an IMAP extension, compression,
-caching, authentication, or automatic reconnects.
-Python 3.8 or newer with SSL support is required.
+Skadi connections use checksummed zstd level 22 frames in both directions.
+Providers use conventional IMAP. Explicit HTTPS image requests receive smaller
+WebP previews, or original bytes on request. Automatic IMAP replay is not implemented.
+Njord is native C++ using libevent, OpenSSL, zstd, libcurl and WebP.
 .PP
 By default Njord listens on 127.0.0.1:1143 and connects to the provider
 using verified TLS on port 993. Provider credentials pass through the relay;
@@ -24,13 +25,13 @@ Provider port. Defaults to 993, or 143 with --upstream-plaintext.
 .TP
 .B --upstream-plaintext
 Forward raw TCP instead of establishing upstream TLS. Njord does not negotiate
-STARTTLS; a raw tunnel can pass through an end-to-end TLS conversation.
+STARTTLS. With --raw, a tunnel can pass an end-to-end TLS conversation.
 .TP
 .BI --upstream-ca " FILE"
 CA certificate file for upstream verification. Verification is never disabled.
 .TP
 .BI --listen " ADDRESS"
-Listen address; defaults to 127.0.0.1. IPv4 and IPv6 are supported.
+Numeric listen address; defaults to 127.0.0.1. IPv4 and IPv6 are supported.
 .TP
 .BI --port " PORT"
 Listen port; defaults to 1143. Zero requests an available port from the OS.
@@ -42,12 +43,31 @@ Enable implicit listener TLS using this certificate chain.
 Listener private key. Must be specified together with --certfile.
 .TP
 .BI --connect-timeout " SECONDS"
-Connection and TLS handshake timeout for each side. Defaults to 30 seconds.
+DNS, connection, and TLS handshake timeout. Listener TLS and upstream setup
+each get a deadline. Defaults to 30 seconds.
 Established sessions have no application idle timeout.
 .TP
 .BI --shutdown-timeout " SECONDS"
 Graceful drain and TLS shutdown deadline; defaults to 30 seconds. On expiry,
 remaining connections are aborted and the event is logged.
+.TP
+.B --raw
+Use an ordinary uncompressed TCP relay for clients without the Njord protocol.
+.TP
+.BI --image-width " PIXELS"
+Longest preview dimension; default 1024. WebP permits 1 through 16383.
+.TP
+.BI --image-quality " NUMBER"
+WebP preview quality, 0 through 100; default 65.
+.TP
+.BI --image-timeout " SECONDS"
+Deadline for each HTTPS image transfer; default 60.
+.TP
+.BI --image-ca " FILE"
+CA bundle for HTTPS images. The default is system trust.
+.TP
+.B --image-allow-private
+Allow image fetches to private network addresses, rejected by default.
 .TP
 .B --verbose
 Log connection diagnostics, never mail contents or credentials.
@@ -62,6 +82,17 @@ Traffic is streamed with backpressure and no application message-size limit.
 Plain TCP half-closes are forwarded. TLS EOF ends the session because TLS
 does not support independent write-half shutdown.
 SIGINT and SIGTERM stop the listener and disconnect all sessions.
+.SH SKADI
+Use {localhost:1143/njord}INBOX for a local or tunneled listener, or
+{home.example.com:1993/njord/ssl}INBOX for an implicit TLS listener.
+Without /njord, Skadi uses normal IMAP.
+.PP
+K (sYnc) batches uncached headers and downloads selected message bodies.
+[ (PartSizes) inspects attachment metadata without fetching contents.
+Activate HTTPS image handles to fetch previews; O requests the original.
+.PP
+Restrict listener access to trusted clients. The image endpoint does not
+require an IMAP login; use firewall rules, a VPN or SSH forwarding.
 .SH EXAMPLE
 .nf
 njord --upstream imap.example.com

@@ -43,7 +43,7 @@ HFILES=	../include/system.h ../include/general.h \
 	copyaddr.h debug.h detach.h detoken.h editorial.h escapes.h filter.h filttype.h \
 	flag.h folder.h foldertype.h handle.h headers.h help.h helptext.h hist.h \
 	ical.h icaltype.h icache.h imap.h indxtype.h \
-	init.h keyword.h kittyimg.h goblindl.h htmlbody.h offcache.h outbox.h ldap.h list.h mailcap.h mailcmd.h mailindx.h maillist.h \
+	init.h keyword.h kittyimg.h remoteimg.h goblindl.h htmlbody.h offcache.h outbox.h ldap.h list.h mailcap.h mailcmd.h mailindx.h maillist.h \
 	mailpart.h mailview.h margin.h mimedesc.h mimetype.h msgno.h newmail.h news.h \
 	options.h pattern.h pineelt.h pipe.h readfile.h remote.h remtype.h repltype.h reply.h \
 	rfc2231.h save.h savetype.h search.h send.h sequence.h signal.h smime.h smkeys.h sort.h sorttype.h \
@@ -54,7 +54,7 @@ OFILES=	ablookup.obj abdlc.obj addrbook.obj addrstring.obj adrbklib.obj bldaddr.
 	color.obj conf.obj context.obj copyaddr.obj detoken.obj detach.obj editorial.obj escapes.obj \
 	filter.obj flag.obj folder.obj handle.obj help.obj helptext.obj hist.obj icache.obj \
 	ical.obj imap.obj init.obj \
-	keyword.obj kittyimg.obj goblindl.obj htmlbody.obj offcache.obj outbox.obj ldap.obj list.obj mailcap.obj mailcmd.obj mailindx.obj maillist.obj mailview.obj \
+	keyword.obj kittyimg.obj remoteimg.obj goblindl.obj htmlbody.obj offcache.obj outbox.obj ldap.obj list.obj mailcap.obj mailcmd.obj mailindx.obj maillist.obj mailview.obj \
 	margin.obj mimedesc.obj mimetype.obj msgno.obj newmail.obj news.obj pattern.obj pipe.obj \
 	readfile.obj remote.obj reply.obj rfc2231.obj save.obj search.obj sequence.obj send.obj \
 	smime.obj smkeys.obj sort.obj state.obj status.obj store.obj stream.obj string.obj strlst.obj \

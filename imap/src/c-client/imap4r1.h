@@ -270,6 +270,13 @@ typedef struct imap_cap {
 /* Function prototypes */
 
 IMAPCAP *imap_cap (MAILSTREAM *stream);
+
+/* One UID FETCH with an input-sized command and per-message completion callback. */
+typedef void (*imap_batch_callback_t)(MAILSTREAM *, unsigned long, void *);
+#define IMAP_BATCH_HEADERS 0
+#define IMAP_BATCH_BODIES 1
+#define IMAP_BATCH_METADATA 2
+long imap_fetch_batch(MAILSTREAM *, const char *, int, imap_batch_callback_t, void *);
 char *imap_host (MAILSTREAM *stream);
 long imap_cache (MAILSTREAM *stream,unsigned long msgno,char *seg,
 		 STRINGLIST *stl,SIZEDTEXT *text);

@@ -501,6 +501,24 @@ view_text:
 	dprint((2,"MAIL_CMD: going to attachment screen\n"));
 	break;
 
+      case MC_ATTACHINFO :
+        if(any_messages(msgmap,NULL,"to inspect")){
+            char *information = offcache_attachment_info(stream,mn_m2raw(msgmap,mn_get_cur(msgmap)));
+            if(information){
+                SCROLL_S view;
+                memset(&view,0,sizeof(view));
+                view.text.text = information; view.text.src = CharStar;
+                view.text.desc = _("attachment sizes");
+                view.bar.title = _("ATTACHMENT TRANSFER SIZES");
+                view.quell_newmail = 1;
+                scrolltool(&view);
+                fs_give((void **)&information);
+                state->mangled_screen = 1;
+            }
+            else q_status_message(SM_ORDER,0,4,_("Attachment metadata is not cached; Sync the folder to fetch it"));
+        }
+        break;
+
 
           /*---------- Previous message ----------*/
       case MC_PREVITEM :
@@ -10339,6 +10357,7 @@ flag_submenu(mc)
 void
 cmd_sync(struct pine *state, MAILSTREAM *stream)
 {
+    int ok = 1;
     if(!offcache_enabled()){
 	q_status_message(SM_ORDER, 0, 3, _("The offline cache is disabled"));
 	return;
@@ -10356,17 +10375,38 @@ cmd_sync(struct pine *state, MAILSTREAM *stream)
 
 	(void) do_broach_folder(state->cur_folder, state->context_current,
 				NULL, DB_FORCELIVE);
-	return;
+        stream = state->mail_stream;
+        if(!stream || offcache_is_stream(stream)) return;
     }
 
     if(stream && offcache_cacheable_stream(stream)){
 	offcache_note_live();
-	offcache_learn_stream(stream);
+        ok = offcache_sync_headers(stream);
+        if(ok && any_lflagged(state->msgmap, MN_SLCT)){
+            unsigned long *uids = NULL;
+            size_t count = 0;
+            long i;
+            /* Allocate from the actual selection, with no command-size cap. */
+            for(i = 1; i <= mn_get_total(state->msgmap); ++i)
+                if(get_lflag(stream,state->msgmap,i,MN_SLCT)) ++count;
+            if(count > (size_t)-1 / sizeof(*uids) ||
+               !(uids = (unsigned long *)malloc(count * sizeof(*uids)))) ok = 0;
+            else{
+                count = 0;
+                for(i = 1; i <= mn_get_total(state->msgmap); ++i)
+                    if(get_lflag(stream,state->msgmap,i,MN_SLCT))
+                        uids[count++] = mail_elt(stream,mn_m2raw(state->msgmap,i))->private.uid;
+                ok = offcache_prepare_batch(stream,uids,count);
+                free(uids);
+            }
+        }
 	offcache_checkpoint();
     }
 
     if(offcache_network_ok() && outbox_count() > 0)
       (void) outbox_flush();
 
-    q_status_message(SM_ORDER, 0, 3, _("Offline cache is up to date"));
+    q_status_message(SM_ORDER, 0, 3, ok
+        ? _("Headers synchronized; selected message bodies saved for offline use")
+        : _("Sync incomplete; complete messages were saved. Retry Sync to continue"));
 }

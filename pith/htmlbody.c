@@ -418,6 +418,7 @@ html_read_all(STORE_S *so)
     so_seek(so, 0L, 0);
     gf_set_so_readc(&gc, so);
     gf_set_so_writec(&pc, tmp);
+    gf_filter_init();
     (void) gf_pipe(gc, pc);
     gf_clear_so_readc(so);
     gf_clear_so_writec(tmp);
@@ -835,8 +836,10 @@ html_restore_composed_text(struct mail_bodystruct **bp)
 
     top = *bp;
     node = top;
-    if(top->type == TYPEMULTIPART && top->subtype
-       && !strucmp(top->subtype, "MIXED") && top->nested.part){
+    /* Newly composed multipart bodies may use the default MIXED subtype. */
+    if(top->type == TYPEMULTIPART
+       && (!top->subtype || !strucmp(top->subtype, "MIXED"))
+       && top->nested.part){
 	mixed = top;
 	node = &top->nested.part->body;
     }

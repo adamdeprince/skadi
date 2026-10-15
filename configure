@@ -634,7 +634,11 @@ ac_includes_default="\
 #endif"
 
 gt_needs=
-ac_subst_vars='am__EXEEXT_FALSE
+ac_subst_vars='WEBP_CFLAGS
+WEBP_LIBS
+ZSTD_CFLAGS
+ZSTD_LIBS
+am__EXEEXT_FALSE
 am__EXEEXT_TRUE
 LTLIBOBJS
 LIBOBJS
@@ -939,7 +943,11 @@ with_ipv6
 with_dlopen
 with_ntlm
 '
-      ac_precious_vars='build_alias
+      ac_precious_vars='WEBP_CFLAGS
+WEBP_LIBS
+ZSTD_CFLAGS
+ZSTD_LIBS
+build_alias
 host_alias
 target_alias
 CC
@@ -22869,6 +22877,43 @@ if test "x$alpine_NTLM" != "xnone" ; then
   { $as_echo "$as_me:${as_lineno-$LINENO}: * * * Including NTLM Authenticator" >&5
 $as_echo "$as_me: * * * Including NTLM Authenticator" >&6;}
 fi
+
+# Keep this generated check aligned with configure.ac (Autoconf 2.69).
+if test -z "$ZSTD_CFLAGS$ZSTD_LIBS" && command -v pkg-config >/dev/null 2>&1 && pkg-config --exists libzstd ; then
+  ZSTD_CFLAGS=`pkg-config --cflags libzstd`
+  ZSTD_LIBS=`pkg-config --libs libzstd`
+fi
+if test -z "$WEBP_CFLAGS$WEBP_LIBS" && command -v pkg-config >/dev/null 2>&1 && pkg-config --exists libwebp ; then
+  WEBP_CFLAGS=`pkg-config --cflags libwebp`
+  WEBP_LIBS=`pkg-config --libs libwebp`
+fi
+CPPFLAGS="$CPPFLAGS $WEBP_CFLAGS"
+LIBS="$LIBS ${WEBP_LIBS:--lwebp}"
+CPPFLAGS="$CPPFLAGS $ZSTD_CFLAGS"
+LIBS="$LIBS ${ZSTD_LIBS:--lzstd}"
+ac_fn_c_check_header_mongrel "$LINENO" "webp/decode.h" "ac_cv_header_webp_decode_h" "$ac_includes_default"
+if test "x$ac_cv_header_webp_decode_h" != xyes; then
+  as_fn_error $? "WebP development headers are required for image previews" "$LINENO" 5
+fi
+ac_fn_c_check_header_mongrel "$LINENO" "zstd.h" "ac_cv_header_zstd_h" "$ac_includes_default"
+if test "x$ac_cv_header_zstd_h" != xyes; then
+  as_fn_error $? "zstd development headers are required for Njord support" "$LINENO" 5
+fi
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h. */
+#include <zstd.h>
+int main(void) {
+  ZSTD_CCtx *c = ZSTD_createCCtx();
+  ZSTD_compress2(c, 0, 0, 0, 0);
+  ZSTD_freeCCtx(c);
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+else
+  as_fn_error $? "zstd 1.4 or newer is required for Njord support" "$LINENO" 5
+fi
+rm -f core conftest.err conftest.$ac_objext conftest$ac_exeext conftest.$ac_ext
 
 if test -n "$CPPFLAGS" ; then
   alpine_c_client_cflags="$alpine_c_client_cflags ${CPPFLAGS}"
