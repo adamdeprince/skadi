@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f7f6f1">
+  <meta name="description" content="Skadi is a fork of Alpine with kitty and Silkie support, inline images, HTML composition, offline mail, and Njord, its companion IMAP proxy.">
+  <link rel="canonical" href="https://xn--skai-dqa.goblinreactor.com/">
+  <link rel="icon" href="assets/mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+  <title>Skadi — Alpine roots. New horizons.</title>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header">
+    <nav class="wrap navigation" aria-label="Main navigation">
+      <a class="brand" href="./" aria-label="Skadi home"><img src="assets/mark.svg" alt="" width="34" height="34">skadi<span class="brand-divider">/</span><span class="brand-description">terminal mail</span></a>
+      <div class="nav-links"><a href="#features">Features</a><a href="#njord">Njord</a><a href="#install">Install</a><a class="source-link" href="https://github.com/adamdeprince/skadi">Source <span aria-hidden="true">↗</span></a></div>
+    </nav>
+  </header>
+  <main id="main">
+    <section class="hero">
+      <div class="wrap hero-layout">
+        <div class="hero-text">
+          <p class="eyebrow">A Goblin Reactor project · Montpelier, Vermont</p>
+          <h1>Alpine roots.<br><span>New horizons.</span></h1>
+          <p class="hero-copy"><strong>Skadi is a fork of Alpine for modern terminals and life on a thin connection.</strong> Inline images, rich-text composition, and offline mail, with support for <a href="https://sw.kovidgoyal.net/kitty/">kitty</a> and <a href="https://silkie.goblinreactor.com/">Silkie</a>.</p>
+          <div class="actions"><a class="button primary" href="#install">Get Skadi <span aria-hidden="true">↗</span></a><a class="button" href="#features">See what’s new <span aria-hidden="true">↓</span></a></div>
+          <p class="hero-footnote">Keyboard at hand. Mail close by. A little farther from the grid.</p>
+        </div>
+        <figure class="mascot">
+          <div class="mountain-lines" aria-hidden="true"></div>
+          <picture><source srcset="assets/goblin-on-skis.webp" type="image/webp"><img src="assets/goblin-on-skis.png" alt="The fluffy black-and-white Goblin Reactor silkie chicken on a pair of skis." width="1280" height="1280" fetchpriority="high"></picture>
+          <figcaption><span>01 / SKADI</span><span>Ready for different terrain.</span></figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <div class="lineage"><div class="wrap lineage-inner"><span>THE FAMILY TREE</span><p>Pine <span aria-hidden="true">→</span> Alpine <span aria-hidden="true">→</span> <strong>Skadi</strong></p><a href="https://repo.or.cz/alpine.git">Built on Alpine’s foundations <span aria-hidden="true">↗</span></a></div></div>
+
+    <section class="section wrap" id="features" aria-labelledby="features-title">
+      <div class="section-heading"><div><p class="eyebrow">01 / What’s new</p><h2 id="features-title">Familiar mail.<br>More capable terminals.</h2></div><p class="section-intro">Skadi keeps Alpine’s keyboard-driven workflow, mail configuration, and Pico composer. These are the additions in the fork.</p></div>
+      <dl class="feature-list">
+        <div class="feature"><dt><span class="number">01</span>Images in your mail</dt><dd>See image attachments and embedded HTML images directly in the message viewer. Thumbnails preserve their proportions, adapt to terminal resizing, and work over SSH with the kitty graphics protocol.</dd></div>
+        <div class="feature"><dt><span class="number">02</span>A richer composer</dt><dd>Add bold, italic, headings, links, lists, quotes, and inline images with keyboard shortcuts. Send HTML with a plain-text alternative, preview that text before sending, and resume HTML drafts. Optional formatted replies preserve basic markup.</dd></div>
+        <div class="feature"><dt><span class="number">03</span>Files across the connection</dt><dd>Use the kitty file-transfer protocol to download attachments to the computer running your terminal, or attach files from that computer to a remote mail session. Choose one attachment or download them together.</dd></div>
+        <div class="feature"><dt><span class="number">04</span>Modern keyboard input</dt><dd>Support for the kitty keyboard protocol and modified keys makes Alt shortcuts available throughout the composer. Bracketed paste keeps pasted text from turning into editor commands.</dd></div>
+        <div class="feature"><dt><span class="number">05</span>Browser sign-in, less copying</dt><dd>OAuth authorization can receive a browser callback locally, with a clickable sign-in link and a responsive authorization screen. Remote sessions provide instructions for forwarding the callback over SSH.</dd></div>
+        <div class="feature"><dt><span class="number">06</span>Mail when the link drops</dt><dd>Read previously cached IMAP mail offline. Keep flag changes and deletions for the next sync, and queue failed sends in a local outbox. A cache-first option lets you open cached folders before contacting the server.</dd></div>
+      </dl>
+    </section>
+
+    <section class="terminals section" id="terminals" aria-labelledby="terminals-title">
+      <div class="wrap terminal-layout">
+        <div><p class="eyebrow">02 / The terminal is part of the experience</p><h2 id="terminals-title">At home in<br>kitty &amp; Silkie.</h2><p>Skadi uses the graphics, keyboard, and file-transfer protocols provided by kitty and inherited by <a href="https://silkie.goblinreactor.com/">Silkie</a>, Goblin Reactor’s fork of kitty.</p><p>Image rendering also supports iTerm2 images and sixel. Available features depend on the terminal and connection.</p></div>
+        <div class="terminal-notes"><h3>A few practical details</h3><ul><li>File transfers require a direct terminal session; the current transfer path does not run through tmux or screen.</li><li>Kitty and iTerm2 images under tmux need passthrough enabled.</li><li>On macOS, configure Option to send Alt for the composer’s formatting shortcuts.</li><li>The offline cache and new relay workflow target Unix systems.</li></ul><div class="text-links"><a href="https://silkie.goblinreactor.com/">Explore Silkie ↗</a><a href="https://sw.kovidgoyal.net/kitty/">kitty documentation ↗</a></div></div>
+      </div>
+    </section>
+
+    <section class="njord section" id="njord" aria-labelledby="njord-title">
+      <div class="wrap">
+        <div class="section-heading"><div><p class="eyebrow">03 / Meet Njord</p><h2 id="njord-title">Your connection home.</h2></div><p class="section-intro">Njord is Skadi’s companion IMAP proxy. Run it on your home Linux computer and let that machine talk to your mail provider.</p></div>
+        <div class="status-note"><span class="status-dot" aria-hidden="true"></span><p><strong>Available now: a forwarding shell.</strong> Njord relays traffic in both directions, with verified TLS to the upstream server and optional TLS for clients. It does not yet compress mail or implement the new IMAP extension.</p></div>
+        <figure class="route"><figcaption>THE PLANNED SATELLITE PATH <span>Extension in development</span></figcaption><div class="route-flow"><div class="route-stop"><span>WITH YOU</span><h3>Skadi</h3><p>Your mail client</p></div><div class="route-link constrained"><span aria-hidden="true">↔</span><p>Satellite link<br><strong>Planned IMAP extension</strong></p></div><div class="route-stop"><span>AT HOME</span><h3>Njord</h3><p>Your Linux computer</p></div><div class="route-link"><span aria-hidden="true">↔</span><p>Conventional<br><strong>IMAP</strong></p></div><div class="route-stop"><span>AT YOUR PROVIDER</span><h3>Your mail</h3><p>Your existing account</p></div></div></figure>
+        <div class="njord-details"><p>The next step is an IMAP extension designed for low-bandwidth, high-latency connections. Njord will translate it back to conventional IMAP, keeping the back-and-forth with your provider on the home side of the satellite link.</p><p>The goal is practical mail afloat or off the grid, using a proxy you run yourself. The extension, compression, and satellite performance are future work; the current release establishes the relay.</p></div>
+        <a class="text-link" href="https://github.com/adamdeprince/skadi/blob/kitty-inline-images/njord/README.md">Njord setup and configuration ↗</a>
+      </div>
+    </section>
+
+    <section class="section wrap" id="install" aria-labelledby="install-title">
+      <div class="section-heading"><div><p class="eyebrow">04 / Get started</p><h2 id="install-title">Take it for a run.</h2></div><p class="section-intro">Skadi and Njord live in the same repository. Skadi builds on Alpine’s C codebase; Njord uses Python’s standard library.</p></div>
+      <div class="install-grid package-install">
+        <article><h3>macOS · Homebrew</h3><p>Native Apple Silicon bottle, built and tested on macOS 26 Tahoe.</p><pre><code>brew tap goblinreactor/tap https://brew.goblinreactor.com/homebrew-tap.git
+brew install goblinreactor/tap/skadi goblinreactor/tap/njord
+skadi</code></pre><a class="text-link" href="https://brew.goblinreactor.com/">Bottles, source &amp; checksums ↗</a></article>
+        <article><h3>Linux · APT</h3><p>Ubuntu 26.04: AMD64 and ARM64. Kylin V10 SP1: old-world LoongArch64.</p><p><a href="https://apt.goblinreactor.com/#install">Add the Goblin Reactor APT repository</a> for your distribution, then:</p><pre><code>sudo apt update
+sudo apt install skadi njord
+skadi</code></pre><a class="text-link" href="https://apt.goblinreactor.com/">Packages, repository setup &amp; checksums ↗</a></article>
+      </div>
+      <p class="package-note">Skadi 0.1.0 · Njord 0.1.1. Native builds from localhost, naamah, graviton5, and loongson. Packages retain Alpine’s configuration paths and upstream version banner. Njord installs separately; no relay service starts automatically.</p>
+      <div class="install-grid">
+        <article><h3>Build Skadi from source</h3><p>Use Alpine’s build prerequisites for your platform.</p><pre><code>git clone https://github.com/adamdeprince/skadi.git
+cd skadi
+./configure
+make
+./alpine/alpine</code></pre><p class="small">The source build currently retains the <code>alpine</code> executable name and existing Alpine configuration paths.</p><a class="text-link" href="https://github.com/adamdeprince/skadi/blob/kitty-inline-images/README">Build documentation ↗</a></article>
+        <article><h3>Install the Njord relay</h3><p>Requires Python 3.8 or newer. No Python packages to download.</p><pre><code>make -C njord install PREFIX="$HOME/.local"
+$HOME/.local/bin/njord \
+  --upstream imap.example.com</code></pre><p class="small">Replace the example with your provider’s IMAP hostname. Njord listens on <code>127.0.0.1:1143</code> and connects upstream with verified TLS on port <code>993</code>. Use listener TLS or an encrypted tunnel for remote access.</p><a class="text-link" href="https://github.com/adamdeprince/skadi/blob/kitty-inline-images/njord/README.md">All relay options ↗</a></article>
+      </div>
+      <div class="contribute"><p><strong>Work on the next chapter.</strong> Follow development, report an issue, or help improve mail on constrained connections.</p><a class="button primary" href="https://github.com/adamdeprince/skadi">Skadi on GitHub ↗</a></div>
+    </section>
+  </main>
+  <footer><div class="wrap footer-main"><div><a class="footer-brand" href="./">skadi<span aria-hidden="true">.</span></a><p>From the mountains. For the long haul.</p></div><div class="footer-links"><a href="https://goblinreactor.com/">Goblin Reactor ↗</a><a href="https://silkie.goblinreactor.com/">Silkie ↗</a><a href="https://github.com/adamdeprince/skadi">Source ↗</a></div></div><div class="wrap footer-bottom"><p>Made by Adam DePrince in Montpelier, Vermont.</p><p>Built on Alpine and the work of its contributors. <a href="https://github.com/adamdeprince/skadi/blob/kitty-inline-images/LICENSE">Apache 2.0</a>.</p></div></footer>
+</body>
+</html>

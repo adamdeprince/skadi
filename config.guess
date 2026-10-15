@@ -919,7 +919,7 @@ EOF
     i*86:Minix:*:*)
 	echo ${UNAME_MACHINE}-pc-minix
 	exit ;;
-    aarch64:Linux:*:*)
+    aarch64:Linux:*:* | loongarch64:Linux:*:*)
 	echo ${UNAME_MACHINE}-${VENDOR}-linux-${LIBC}
 	exit ;;
     aarch64_be:Linux:*:*)

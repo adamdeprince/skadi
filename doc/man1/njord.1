@@ -1,0 +1,72 @@
+.TH NJORD 1 "October 2026" "Njord 0.1.1"
+.SH NAME
+njord \- Skadi's transparent IMAP forwarding proxy
+.SH SYNOPSIS
+.B njord --upstream
+.I hostname
+.RI [ options ]
+.SH DESCRIPTION
+Njord forwards bytes between each client and a separate provider connection.
+This initial version does not implement an IMAP extension, compression,
+caching, authentication, or automatic reconnects.
+Python 3.8 or newer with SSL support is required.
+.PP
+By default Njord listens on 127.0.0.1:1143 and connects to the provider
+using verified TLS on port 993. Provider credentials pass through the relay;
+they are never logged. Use listener TLS or an encrypted tunnel for remote access.
+.SH OPTIONS
+.TP
+.BI --upstream " HOST"
+Required provider hostname; also used for TLS certificate verification.
+.TP
+.BI --upstream-port " PORT"
+Provider port. Defaults to 993, or 143 with --upstream-plaintext.
+.TP
+.B --upstream-plaintext
+Forward raw TCP instead of establishing upstream TLS. Njord does not negotiate
+STARTTLS; a raw tunnel can pass through an end-to-end TLS conversation.
+.TP
+.BI --upstream-ca " FILE"
+CA certificate file for upstream verification. Verification is never disabled.
+.TP
+.BI --listen " ADDRESS"
+Listen address; defaults to 127.0.0.1. IPv4 and IPv6 are supported.
+.TP
+.BI --port " PORT"
+Listen port; defaults to 1143. Zero requests an available port from the OS.
+.TP
+.BI --certfile " FILE"
+Enable implicit listener TLS using this certificate chain.
+.TP
+.BI --keyfile " FILE"
+Listener private key. Must be specified together with --certfile.
+.TP
+.BI --connect-timeout " SECONDS"
+Connection and TLS handshake timeout for each side. Defaults to 30 seconds.
+Established sessions have no application idle timeout.
+.TP
+.BI --shutdown-timeout " SECONDS"
+Graceful drain and TLS shutdown deadline; defaults to 30 seconds. On expiry,
+remaining connections are aborted and the event is logged.
+.TP
+.B --verbose
+Log connection diagnostics, never mail contents or credentials.
+.TP
+.B --version
+Print the version and exit.
+.TP
+.B --help
+Print usage and exit.
+.SH OPERATION
+Traffic is streamed with backpressure and no application message-size limit.
+Plain TCP half-closes are forwarded. TLS EOF ends the session because TLS
+does not support independent write-half shutdown.
+SIGINT and SIGTERM stop the listener and disconnect all sessions.
+.SH EXAMPLE
+.nf
+njord --upstream imap.example.com
+.fi
+.SH AUTHORS
+Adam DePrince and contributors. Part of Skadi.
+.SH LICENSE
+Apache License, Version 2.0.

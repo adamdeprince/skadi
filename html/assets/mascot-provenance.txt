@@ -1,0 +1,6 @@
+Goblin Reactor silkie chicken on skis
+Generated with the built-in image generation tool, editing Adam DePrince's supplied goblin.png.
+The PNG retains transparency; WebP is a lossless-alpha web delivery conversion.
+
+Prompt:
+Use case: identity-preserve. Asset type: transparent mascot illustration for the Skadi terminal-mail website. Edit target: the supplied /Users/adam/Downloads/goblin.png. Put this exact Goblin Reactor silkie-chicken mascot on a pair of alpine skis. Preserve its distinctive fluffy crest, black-and-white split feather coloring, round glossy eyes, small beak, plump body, detailed ink-engraving illustration style, and recognizable personality. Show the complete mascot and both skis, with feathered feet naturally in simple ski bindings and a slight cheerful downhill lean. Keep the skis understated, with a small accent in acid green #a6e22e matching the existing brand. No additional characters, clothing, text, logos, scenery, mountains, or watermark. Clean production-ready cutout, actual transparent background, generous clear margin around all ski tips and feathers. Do not crop the skis or change the mascot into another animal.

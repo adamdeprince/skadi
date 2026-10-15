@@ -1,0 +1,336 @@
+#!/usr/bin/env python3
+"""Njord: Skadi's transparent IMAP forwarding proxy (Python 3.8+)."""
+
+# Copyright 2026 Adam DePrince
+# Licensed under the Apache License, Version 2.0. See ../LICENSE.
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+from collections import deque
+import logging
+import math
+import signal
+import ssl
+import sys
+
+VERSION = "0.1.1"
+LOG = logging.getLogger("njord")
+
+
+class Endpoint(asyncio.Protocol):
+    """One side of a relay; transport watermarks apply backpressure to its peer."""
+
+    def __init__(self, session, upstream=False):
+        self.session = session
+        self.upstream = upstream
+        self.transport = None
+        self.blocked = False
+        self.eof = False
+
+    @property
+    def peer(self):
+        return self.session.client if self.upstream else self.session.provider
+
+    def connection_made(self, transport):
+        self.transport = transport
+        if self.session.closing:
+            transport.abort()
+            return
+        # Hold input until both connections are ready.
+        # Python 3.8 queues its initial socket reader after connection_made.
+        # Pause on the next loop turn so that startup cannot re-enable reading
+        # and deliver a ClientHello or EOF before setup owns the transport.
+        asyncio.get_running_loop().call_soon(transport.pause_reading)
+        if not self.upstream:
+            self.session.proxy.sessions.add(self.session)
+            self.session.connect_task = asyncio.create_task(self.session.connect())
+            self.session.connect_task.add_done_callback(self.session.connected)
+
+    def data_received(self, data):
+        peer = self.peer
+        if self.session.closing:
+            return
+        if not self.session.ready:
+            # start_tls may deliver application data before returning its new
+            # transport. Preserve it, then pause as soon as that transport exists.
+            try:
+                self.session.pending.append((self, data))
+                if not self.session.listener_handshake:
+                    self.transport.pause_reading()
+            except MemoryError:
+                LOG.error("Out of memory establishing a session; disconnecting")
+                self.session.close(abort=True)
+            return
+        if peer is None or peer.transport is None or peer.transport.is_closing():
+            self.session.close()
+            return
+        try:
+            # Forward each transport-delivered chunk. No complete command,
+            # literal, attachment, or response ever has to fit in a buffer.
+            peer.transport.write(data)
+        except MemoryError:
+            LOG.error("Out of memory forwarding a session; disconnecting")
+            self.session.close(abort=True)
+        except (OSError, RuntimeError) as exc:
+            LOG.warning("Forwarding failed: %s", exc)
+            self.session.close(abort=True)
+
+    def pause_writing(self):
+        self.blocked = True
+        if self.peer is not None and self.peer.transport is not None:
+            self.peer.transport.pause_reading()
+
+    def resume_writing(self):
+        self.blocked = False
+        if self.session.ready and not self.session.closing:
+            if self.peer is not None and self.peer.transport is not None:
+                self.peer.transport.resume_reading()
+
+    def eof_received(self):
+        self.eof = True
+        peer = self.peer
+        if peer is not None and peer.transport is not None:
+            if peer.transport.can_write_eof():
+                peer.transport.write_eof()
+                if peer.eof:
+                    self.session.close()
+                # Plain TCP can finish receiving after sending EOF. In
+                # particular, do not discard a response to a half-closed client.
+                return True
+        # TLS has no independent write-half shutdown. An EOF on either TLS
+        # direction ends the session; close() flushes pending outgoing data.
+        self.session.close()
+        return False
+
+    def connection_lost(self, exc):
+        self.transport = None
+        if exc is not None:
+            LOG.debug("Connection ended: %s", exc)
+        self.session.close()
+        self.session.retire()
+
+
+class Session:
+    def __init__(self, proxy):
+        self.proxy = proxy
+        self.client = Endpoint(self)
+        self.provider = None
+        self.connect_task = None
+        self.ready = False
+        self.closing = False
+        self.pending = deque()
+        self.shutdown_timer = None
+        self.listener_handshake = False
+
+    async def connect(self):
+        args = self.proxy.args
+        self.provider = Endpoint(self, upstream=True)
+        try:
+            if self.proxy.listener_tls is not None:
+                self.listener_handshake = True
+                raw = self.client.transport
+                try:
+                    transport = await asyncio.wait_for(
+                        asyncio.get_running_loop().start_tls(
+                            raw, self.client, self.proxy.listener_tls, server_side=True,
+                        ), timeout=args.connect_timeout,
+                    )
+                except BaseException:
+                    # asyncio does not notify the application protocol when a
+                    # TLS handshake fails before connection_made.
+                    raw.abort()
+                    self.client.transport = None
+                    raise
+                finally:
+                    self.listener_handshake = False
+                if transport is None:
+                    raw.abort()
+                    self.client.transport = None
+                    self.close(abort=True)
+                    return
+                self.client.transport = transport
+                transport.pause_reading()
+            kwargs = {}
+            if self.proxy.upstream_tls is not None:
+                kwargs.update(ssl=self.proxy.upstream_tls, server_hostname=args.upstream)
+            await asyncio.wait_for(
+                asyncio.get_running_loop().create_connection(
+                    lambda: self.provider, args.upstream, args.upstream_port, **kwargs
+                ),
+                timeout=args.connect_timeout,
+            )
+            if not self.closing:
+                self.ready = True
+                while self.pending and not self.closing:
+                    endpoint, data = self.pending.popleft()
+                    endpoint.data_received(data)
+                for endpoint in (self.client, self.provider):
+                    if not self.closing and not endpoint.peer.blocked:
+                        endpoint.transport.resume_reading()
+                LOG.debug("Connected a session to %s:%s", args.upstream, args.upstream_port)
+        except asyncio.CancelledError:
+            self.close(abort=True)
+            raise
+        except (OSError, ValueError, asyncio.TimeoutError, MemoryError) as exc:
+            LOG.warning("Connection setup failed (%s): %s", type(exc).__name__, exc)
+            self.close(abort=True)
+
+    def connected(self, task):
+        # Also runs when cancellation happened before the coroutine started.
+        self.connect_task = None
+        self.retire()
+
+    def shutdown_expired(self):
+        LOG.warning("Session shutdown timed out; aborting remaining transports")
+        self.close(abort=True)
+
+    def close(self, abort=False):
+        self.closing = True
+        self.pending.clear()
+        if abort:
+            if self.shutdown_timer is not None:
+                self.shutdown_timer.cancel()
+                self.shutdown_timer = None
+        elif self.shutdown_timer is None:
+            self.shutdown_timer = asyncio.get_running_loop().call_later(
+                self.proxy.args.shutdown_timeout, self.shutdown_expired
+            )
+        task = self.connect_task
+        if task is not None and task is not asyncio.current_task() and not task.done():
+            task.cancel()
+        for endpoint in (self.client, self.provider):
+            if endpoint is not None and endpoint.transport is not None:
+                if abort:
+                    endpoint.transport.abort()
+                elif not endpoint.transport.is_closing():
+                    endpoint.transport.close()
+        self.retire()
+
+    def retire(self):
+        if self.closing and self.connect_task is None:
+            if all(e is None or e.transport is None for e in (self.client, self.provider)):
+                self.proxy.sessions.discard(self)
+                if self.shutdown_timer is not None:
+                    self.shutdown_timer.cancel()
+                    self.shutdown_timer = None
+
+
+class Proxy:
+    def __init__(self, args):
+        self.args = args
+        self.sessions = set()
+        self.server = None
+        self.upstream_tls = None
+        self.listener_tls = None
+        if not args.upstream_plaintext:
+            self.upstream_tls = ssl.create_default_context(cafile=args.upstream_ca)
+        if args.certfile:
+            self.listener_tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            self.listener_tls.load_cert_chain(args.certfile, args.keyfile)
+
+    async def start(self):
+        self.server = await asyncio.get_running_loop().create_server(
+            lambda: Session(self).client,
+            self.args.listen,
+            self.args.port,
+        )
+        for sock in self.server.sockets:
+            LOG.info("Listening on %s; upstream %s:%s (%s)", sock.getsockname(),
+                     self.args.upstream, self.args.upstream_port,
+                     "TLS verified" if self.upstream_tls else "plaintext")
+        return self
+
+    async def close(self):
+        if self.server is not None:
+            self.server.close()
+        # Abort active connections on service shutdown, including peers that
+        # never complete a TLS shutdown. Do not wait indefinitely on a client.
+        tasks = [s.connect_task for s in self.sessions if s.connect_task is not None]
+        for session in tuple(self.sessions):
+            session.close(abort=True)
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        if self.server is not None:
+            await self.server.wait_closed()
+
+
+def port_number(value):
+    try:
+        port = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("port must be an integer") from exc
+    # TCP's port field is 16 bits. Zero asks the OS for a listening port.
+    if not 0 <= port <= 65535:
+        raise argparse.ArgumentTypeError("port must be between 0 and 65535")
+    return port
+
+
+def timeout_seconds(value):
+    try:
+        seconds = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("timeout must be a number") from exc
+    if not math.isfinite(seconds) or seconds <= 0:
+        raise argparse.ArgumentTypeError("timeout must be finite and greater than zero")
+    return seconds
+
+
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--version", action="version", version="njord " + VERSION)
+    parser.add_argument("--upstream", required=True, metavar="HOST", help="provider IMAP hostname")
+    parser.add_argument("--upstream-port", type=port_number, help="provider port (993 with TLS; 143 with plaintext)")
+    parser.add_argument("--upstream-plaintext", action="store_true", help="forward raw TCP instead of establishing upstream TLS")
+    parser.add_argument("--upstream-ca", metavar="FILE", help="CA file for upstream certificate verification")
+    parser.add_argument("--listen", default="127.0.0.1", metavar="ADDRESS", help="listen address (default: 127.0.0.1)")
+    parser.add_argument("--port", type=port_number, default=1143, help="listen port (default: 1143)")
+    parser.add_argument("--certfile", metavar="FILE", help="enable listener TLS with this certificate chain")
+    parser.add_argument("--keyfile", metavar="FILE", help="listener TLS private key")
+    parser.add_argument("--connect-timeout", type=timeout_seconds, default=30.0, metavar="SECONDS", help="connection/handshake timeout for each side (default: 30); no session idle timeout")
+    parser.add_argument("--shutdown-timeout", type=timeout_seconds, default=30.0, metavar="SECONDS", help="graceful drain/TLS shutdown timeout (default: 30)")
+    parser.add_argument("--verbose", action="store_true", help="log connection events, never mail contents or credentials")
+    args = parser.parse_args(argv)
+    if bool(args.certfile) != bool(args.keyfile):
+        parser.error("--certfile and --keyfile must be supplied together")
+    if args.upstream_plaintext and args.upstream_ca:
+        parser.error("--upstream-ca requires upstream TLS")
+    if args.upstream_port is None:
+        args.upstream_port = 143 if args.upstream_plaintext else 993
+    elif args.upstream_port == 0:
+        parser.error("--upstream-port must be greater than zero")
+    return args
+
+
+async def run(args):
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, stop.set)
+    proxy = Proxy(args)
+    try:
+        await proxy.start()
+        await stop.wait()
+    finally:
+        await proxy.close()
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            loop.remove_signal_handler(sig)
+
+
+def main():
+    args = parse_args()
+    logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
+                        format="%(asctime)s njord: %(levelname)s: %(message)s")
+    try:
+        asyncio.run(run(args))
+    except (OSError, ValueError, MemoryError) as exc:
+        LOG.error("%s: %s", type(exc).__name__, exc)
+        return 1
+    except KeyboardInterrupt:
+        return 0
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

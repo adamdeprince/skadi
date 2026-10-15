@@ -12,7 +12,7 @@
 #
 # ========================================================================
 
-EXTRA_DIST = config.rpath VERSION README LICENSE
+EXTRA_DIST = config.rpath VERSION README LICENSE njord/njord njord/Makefile njord/README.md njord/test_njord.py doc/man1/njord.1
 
 SUBDIRS = m4 po $(REGEX_BUILD) pith pico alpine $(WEB_PUBCOOKIE_BUILD) $(WEB_BUILD)
 
@@ -41,6 +41,8 @@ ACLOCAL_AMFLAGS = --install -I m4
 
 install-exec-local:
 	cd imap && $(MAKE) install-mailutil BUNDLED="$(C_CLIENT_BUNDLED)" DESTDIR="$(DESTDIR)" bindir="$(bindir)" mandir="$(mandir)"
+	$(MAKE) -C $(srcdir)/njord install PREFIX="$(prefix)" BINDIR="$(bindir)" MANDIR="$(mandir)" DESTDIR="$(DESTDIR)"
 
 uninstall-local:
 	cd imap && $(MAKE) uninstall-mailutil BUNDLED="$(C_CLIENT_BUNDLED)" DESTDIR="$(DESTDIR)" bindir="$(bindir)" mandir="$(mandir)"
+	$(MAKE) -C $(srcdir)/njord uninstall PREFIX="$(prefix)" BINDIR="$(bindir)" MANDIR="$(mandir)" DESTDIR="$(DESTDIR)"

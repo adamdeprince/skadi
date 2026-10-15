@@ -425,7 +425,7 @@ target_alias = @target_alias@
 top_build_prefix = @top_build_prefix@
 top_builddir = @top_builddir@
 top_srcdir = @top_srcdir@
-EXTRA_DIST = config.rpath VERSION README LICENSE
+EXTRA_DIST = config.rpath VERSION README LICENSE njord/njord njord/Makefile njord/README.md njord/test_njord.py doc/man1/njord.1
 SUBDIRS = m4 po $(REGEX_BUILD) pith pico alpine $(WEB_PUBCOOKIE_BUILD) $(WEB_BUILD)
 BUILT_SOURCES = c-client.d c-client $(WEB_PUBCOOKIE_LINK)
 CLEANFILES = c-client
@@ -985,9 +985,11 @@ clean-local:
 
 install-exec-local:
 	cd imap && $(MAKE) install-mailutil BUNDLED="$(C_CLIENT_BUNDLED)" DESTDIR="$(DESTDIR)" bindir="$(bindir)" mandir="$(mandir)"
+	$(MAKE) -C $(srcdir)/njord install PREFIX="$(prefix)" BINDIR="$(bindir)" MANDIR="$(mandir)" DESTDIR="$(DESTDIR)"
 
 uninstall-local:
 	cd imap && $(MAKE) uninstall-mailutil BUNDLED="$(C_CLIENT_BUNDLED)" DESTDIR="$(DESTDIR)" bindir="$(bindir)" mandir="$(mandir)"
+	$(MAKE) -C $(srcdir)/njord uninstall PREFIX="$(prefix)" BINDIR="$(bindir)" MANDIR="$(mandir)" DESTDIR="$(DESTDIR)"
 
 # Tell versions [3.59,3.63) of GNU make to not export all variables.
 # Otherwise a system limit (for SysV at least) may be exceeded.
